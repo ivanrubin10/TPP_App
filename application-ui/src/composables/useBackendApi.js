@@ -5,15 +5,19 @@ export function useBackendApi() {
 
   const capturedImage = ref('')
   const detectedObjects = ref([])
+  const resultImage = ref('')
   const captureImage = async () => {
     try {
       const response = await axios.get(`${baseUrl}/capture-image`)
       const data = response.data
+      console.log('Captured image:', data)
       capturedImage.value = `data:image/jpeg;base64,${data.image}`
       detectedObjects.value = data.objects
+      resultImage.value = `data:image/jpeg;base64,${data.result_image}`
       return {
         image: `data:image/jpeg;base64,${data.image}`,
-        objects: data.objects
+        objects: data.objects,
+        resultImage: `data:image/jpeg;base64,${data.result_image}`
       }
     } catch (error) {
       console.error('Error capturing image:', error)
@@ -21,5 +25,5 @@ export function useBackendApi() {
     }
   }
 
-  return { captureImage, capturedImage, detectedObjects }
+  return { captureImage, capturedImage, detectedObjects, resultImage }
 }

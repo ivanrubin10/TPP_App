@@ -19,6 +19,32 @@
   --vt-c-text-light-2: rgba(60, 60, 60, 0.66);
   --vt-c-text-dark-1: var(--vt-c-white);
   --vt-c-text-dark-2: rgba(235, 235, 235, 0.64);
+
+  --primary-100:#0D6E6E;
+  --primary-200:#4a9d9c;
+  --primary-300:#afffff;
+  --accent-100:#FF3D3D;
+  --accent-150: #ff7171;
+  --good-100:#007032;
+  --good-200:#00A349;
+  --no-good-100: #A80000;
+  --no-good-200: #FA0000;
+  --accent-200:#ffe0c8;
+  --text-100:#FFFFFF;
+  --text-200:#e0e0e0;
+  --bg-100:#0D1F2D;
+  --bg-200:#1d2e3d;
+  --bg-300:#354656;
+
+    
+
+  --astronaut-blue: #003f5c;
+  --chambray: #304c7e;
+  --butterfly-bush: #665190;
+  --tapestry: #9f5095;
+  --cranberry: #d44e86;
+  --good-green: #4b9555;
+  --bad-red: #b91c1c;
 }
 
 /* semantic color variables for this project */
@@ -57,8 +83,10 @@
   margin: 0;
   font-weight: normal;
 }
-
 body {
+  height: 100vh;
+}
+/* body {
   min-height: 100vh;
   color: var(--color-text);
   background: var(--color-background);
@@ -83,4 +111,4 @@ body {
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-}
+} */
