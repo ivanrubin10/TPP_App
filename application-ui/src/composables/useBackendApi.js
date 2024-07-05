@@ -1,16 +1,18 @@
 import axios from 'axios'
 import { ref } from 'vue'
+
 export function useBackendApi() {
   const baseUrl = 'http://127.0.0.1:5000'
 
   const capturedImage = ref('')
   const detectedObjects = ref([])
   const resultImage = ref('')
-  const captureImage = async () => {
+  const logs = ref([])
+
+   const captureImage = async () => {
     try {
       const response = await axios.get(`${baseUrl}/capture-image`)
       const data = response.data
-      console.log('Captured image:', data)
       capturedImage.value = `data:image/jpeg;base64,${data.image}`
       detectedObjects.value = data.objects
       resultImage.value = `data:image/jpeg;base64,${data.result_image}`
@@ -25,5 +27,56 @@ export function useBackendApi() {
     }
   }
 
-  return { captureImage, capturedImage, detectedObjects, resultImage }
+  const fetchLogs = async () => {
+    try {
+      const response = await axios.get(`${baseUrl}/logs`)
+      logs.value = response.data
+      return logs.value
+    } catch (error) {
+      console.error('Error fetching logs:', error)
+      throw error
+    }
+  }
+
+  const checkCarExists = async (carId) => {
+    try {
+      const response = await axios.get(`${baseUrl}/check-car/${carId}`)
+      return response.data
+    } catch (error) {
+      console.error('Error checking car existence:', error)
+      throw error
+    }
+  }
+
+  const updateItem = async (item) => {
+    try {
+      const response = await axios.put(`${baseUrl}/update-item`, item)
+      return response.data
+    } catch (error) {
+      console.error('Error updating item:', error)
+      throw error
+    }
+  }
+
+  const addLog = async (log) => {
+    try {
+      const response = await axios.post(`${baseUrl}/log`, log)
+      return response.data
+    } catch (error) {
+      console.error('Error adding log:', error)
+      throw error
+    }
+  }
+
+  return {
+    captureImage,
+    capturedImage,
+    detectedObjects,
+    resultImage,
+    fetchLogs,
+    logs,
+    checkCarExists,
+    updateItem,
+    addLog
+  }
 }

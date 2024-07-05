@@ -1,8 +1,11 @@
 <template>
     <div class="footer-container" ref="scrollableContainer" @mousedown="handleMouseDown" @wheel="handleWheel">
         <div class="footer-content" ref="footerContent">
-            <div class="footer-item" v-for="(item, index) in items" :key="index" :style="getItemStyle(index)"
-                @click="setSelectedItem(index)">
+            <div class="footer-item"
+                 v-for="(item, index) in items"
+                 :key="index"
+                 :style="getItemStyle(index)"
+                 @click="handleItemClick(index)">
                 <div class="footer-item-content">
                     <div class="footer-item-header">
                         <span class="footer-item-header-name">{{ item.name }}</span>
@@ -22,7 +25,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, defineEmits } from "vue";
+import { ref, onMounted, onUnmounted, defineProps, defineEmits } from 'vue';
 
 const props = defineProps({
     items: {
@@ -32,18 +35,16 @@ const props = defineProps({
     modelValue: {
         type: Object,
     }
-})
+});
 
-const emit = defineEmits(['update:modelValue']);
+const emit = defineEmits(['update:modelValue', 'item-clicked']);
 
 const items = ref(props.items);
-
 const scrollableContainer = ref<HTMLDivElement | null>(null);
 const footerContent = ref<HTMLDivElement | null>(null);
 let isDragging = false;
 let startX = 0;
 let scrollLeft = 0;
-
 
 const handleMouseDown = (e: MouseEvent) => {
     if (!scrollableContainer.value) return;
@@ -58,7 +59,7 @@ const handleMouseMove = (e: MouseEvent) => {
     if (!isDragging || !scrollableContainer.value) return;
     e.preventDefault();
     const x = e.pageX - scrollableContainer.value.offsetLeft;
-    const walk = (x - startX); // scroll-fast
+    const walk = (x - startX);
     scrollableContainer.value.scrollLeft = scrollLeft - walk;
 };
 
@@ -74,6 +75,19 @@ const handleWheel = (e: WheelEvent) => {
     scrollableContainer.value.scrollLeft += e.deltaY;
 };
 
+function handleItemClick(index: number) {
+    emit('item-clicked', items.value[index]);
+}
+
+function getItemStyle(index: number) {
+    if (items.value[index].outcome === 'success') {
+        return { backgroundImage: 'linear-gradient(180deg, var(--good-100) 0%, var(--good-100) 100%)' };
+    } else if (items.value[index].outcome === 'failure') {
+        return { backgroundImage: 'linear-gradient(180deg, var(--no-good-100) 0%, var(--no-good-100) 100%)' };
+    }
+    return { backgroundColor: 'var(--bg-300)' };
+}
+
 onMounted(() => {
     document.addEventListener('mouseup', handleMouseUp);
 });
@@ -81,32 +95,12 @@ onMounted(() => {
 onUnmounted(() => {
     document.removeEventListener('mouseup', handleMouseUp);
 });
-
-function setSelectedItem(index: number) {
-    //sets the is-selected class to the selected item
-    const itemsElements = document.querySelectorAll('.footer-item');
-    itemsElements.forEach((item) => {
-        item.classList.remove('is-selected');
-    });
-    itemsElements[index].classList.add('is-selected');
-    emit('update:modelValue', items.value[index]);
-}
-const getItemStyle = (index: number) => {
-    if (items.value[index].outcome === 'success') {
-        return { backgroundImage: 'linear-gradient(180deg, var(--good-100) 0%, var(--good-100) 100%)' };
-    } else if (items.value[index].outcome === 'failure') {
-        // Other items style (grayed out)
-        return { backgroundImage: 'linear-gradient(180deg, var(--no-good-100) 0%, var(--no-good-100) 100%)' };
-    }
-    // Other items style (grayed out)
-    return { backgroundColor: 'var(--bg-300)' };
-};
 </script>
 
 <style scoped>
 .footer-container {
     width: 100%;
-    background-color: var(--bg-100);
+    background-color: var(--bg-200);
     position: fixed;
     padding: 0 55px;
     bottom: 0;
@@ -114,7 +108,7 @@ const getItemStyle = (index: number) => {
     overflow-y: hidden;
     white-space: nowrap;
     border-top: var(--accent-200) 1px solid;
-    height: 220px;
+    height: 150px;
     /* Set a fixed height to ensure consistent height */
     display: flex;
     cursor: pointer;
@@ -130,8 +124,8 @@ const getItemStyle = (index: number) => {
 }
 
 .footer-item {
-    width: 280px;
-    height: 170px; /* Adjust to fit content */
+    width: 250px;
+    height: 120px; /* Adjust to fit content */
     background-color: var(--good-green);
     color: var(--text-100);
     margin: 15px;
@@ -140,7 +134,7 @@ const getItemStyle = (index: number) => {
     flex-direction: column;
     justify-content: space-between;
     align-items: flex-start;
-    padding: 10px;
+    padding: 7px;
     box-shadow: 0px 2px 5px rgba(0, 0, 0, 0.1);
     position: relative;
     font-family: sans-serif;
@@ -169,11 +163,10 @@ const getItemStyle = (index: number) => {
 }
 
 .footer-item-body {
-    font-size: 0.9em;
+    font-size: 0.7em;
     min-width: 200px;
-    height: 35px;
+    height: 25px;
     white-space: wrap;
-    margin-bottom: 15px;
 }
 
 .footer-item-body-info {
@@ -186,10 +179,10 @@ const getItemStyle = (index: number) => {
   width: 100%;
   position: relative;
   bottom: -5px;
-  margin-top: 10px;
+  margin-top: 5px;
 }
 .footer-item-image {
-    width: 100px;
+    width: 60px;
     height: auto;
     margin: 0 auto;
     filter: invert(0.8);

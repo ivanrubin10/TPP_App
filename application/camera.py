@@ -15,9 +15,6 @@ def capture_image():
   if not ret:
     raise Exception("Failed to capture image")
   
-  # get the Test_image.jpg from the application folder
-  # frame = cv2.imread('Test_image.jpg')
   encoded_image = base64.b64encode(cv2.imencode('.jpg', frame)[1]).decode('utf-8')
     
   return encoded_image
-

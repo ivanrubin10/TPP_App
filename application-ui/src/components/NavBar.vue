@@ -8,7 +8,7 @@
     </div>
     <ul>
       <li><router-link to="/">Inspección</router-link></li>
-      <li><router-link to="/dashboard">Dashbard</router-link></li>
+      <li><router-link to="/dashboard">Dashboard</router-link></li>
       <li><router-link to="/historial">Historial</router-link></li>
       <li><router-link to="/config">Configuración</router-link></li>
     </ul>
@@ -22,22 +22,22 @@
   border-bottom: var(--accent-200) 1px solid;
   box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
   width: 100%;
+  padding: 0 70px;
   font-size: 30px;
   display: flex;
+  justify-content: space-between;
   align-items: center;
 }
 
 .title {
   width: 500px;
-  margin-left: 70px;
   color: var(--text-100);
 }
 
 ul { 
   list-style-type: none;
   margin: 0;
-  padding: 0 10em;
-  width: 100%;
+  padding-left: 0;
   overflow: hidden;
   display: flex;
 }
