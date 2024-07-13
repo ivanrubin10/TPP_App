@@ -77,6 +77,11 @@ const handleWheel = (e: WheelEvent) => {
 
 function handleItemClick(index: number) {
     emit('item-clicked', items.value[index]);
+    const itemsElements = document.querySelectorAll('.footer-item');
+    itemsElements.forEach((item) => {
+        item.classList.remove('is-selected');
+    });
+    itemsElements[index].classList.add('is-selected');
 }
 
 function getItemStyle(index: number) {
