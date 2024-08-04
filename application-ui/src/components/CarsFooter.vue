@@ -1,17 +1,14 @@
 <template>
     <div class="footer-container" ref="scrollableContainer" @mousedown="handleMouseDown" @wheel="handleWheel">
         <div class="footer-content" ref="footerContent">
-            <div class="footer-item"
-                 v-for="(item, index) in items"
-                 :key="index"
-                 :style="getItemStyle(index)"
-                 @click="handleItemClick(index)">
+            <div class="footer-item" v-for="(item, index) in items" :key="index" :style="getItemStyle(index)"
+                @click="handleItemClick(index)">
                 <div class="footer-item-content">
                     <div class="footer-item-header">
                         <span class="footer-item-header-name">{{ item.name }}</span>
-                    </div>
-                    <div class="footer-item-body">
-                        <span class="footer-item-body-info">{{ item.info }}</span>
+                        <div class="footer-item-body">
+                            <span class="footer-item-body-info">{{ item.info }}</span>
+                        </div>
                     </div>
                     <img class="footer-item-image" src="@/assets/Car-2-icon.png" alt="Car Image">
                     <div class="footer-footer">
@@ -107,20 +104,20 @@ onUnmounted(() => {
     width: 100%;
     background-color: var(--bg-200);
     position: fixed;
-    padding: 0 55px;
     bottom: 0;
     overflow-x: hidden;
     overflow-y: hidden;
     white-space: nowrap;
     border-top: var(--accent-200) 1px solid;
-    height: 150px;
+    height: 20vh;
+    padding: 0 55px;
     /* Set a fixed height to ensure consistent height */
     display: flex;
     cursor: pointer;
     /* To ensure it expands to the content */
     align-items: center;
     /* Center content vertically if needed */
-    z-index: 1000;
+    z-index: 10;
     /* Ensure it stays on top of other content */
 }
 
@@ -129,8 +126,9 @@ onUnmounted(() => {
 }
 
 .footer-item {
-    width: 250px;
-    height: 120px; /* Adjust to fit content */
+    width: 300px;
+    height: 16vh;
+    /* Adjust to fit content */
     background-color: var(--good-green);
     color: var(--text-100);
     margin: 15px;
@@ -149,12 +147,14 @@ onUnmounted(() => {
     display: flex;
     flex-direction: column;
     width: 100%;
+    height: 100%;
+    justify-content: space-between;
 }
 
 .footer-item-header {
     display: flex;
-    flex-direction: row;
-    justify-content: space-between;
+    flex-direction: column;
+    gap: 5px;
     margin-bottom: 5px;
     font-size: 1em;
 }
@@ -168,7 +168,7 @@ onUnmounted(() => {
 }
 
 .footer-item-body {
-    font-size: 0.7em;
+    font-size: 0.8em;
     min-width: 200px;
     height: 25px;
     white-space: wrap;
@@ -179,18 +179,24 @@ onUnmounted(() => {
 }
 
 .footer-footer {
-  display: flex;
-  justify-content: space-between;  
-  width: 100%;
-  position: relative;
-  bottom: -5px;
-  margin-top: 5px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    position: relative;
+    margin-top: 5px;
 }
+
 .footer-item-image {
-    width: 60px;
+    width: 9vh;
     height: auto;
     margin: 0 auto;
     filter: invert(0.8);
+    -webkit-user-drag: none;
+    user-select: none;
+    -moz-user-select: none;
+    -webkit-user-select: none;
+    -ms-user-select: none;
 }
 
 .footer-item-body-date {

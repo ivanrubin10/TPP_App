@@ -18,7 +18,7 @@
 <style scoped>
 .nav-bar {
   background-color: var(--bg-100);
-  display: flex;
+  position: fixed;
   border-bottom: var(--accent-200) 1px solid;
   box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
   width: 100%;
@@ -53,5 +53,35 @@ li a {
 }
 li:hover {
   background-color: var(--bg-300);
+}
+
+.logo {
+  display: block;
+  margin: 0 auto 2rem;
+}
+
+nav {
+  width: 100%;
+  font-size: 12px;
+  text-align: center;
+  margin-top: 2rem;
+}
+
+nav a.router-link-exact-active {
+  color: var(--color-text);
+}
+
+nav a.router-link-exact-active:hover {
+  background-color: transparent;
+}
+
+nav a {
+  display: inline-block;
+  padding: 0 1rem;
+  border-left: 1px solid var(--color-border);
+}
+
+nav a:first-of-type {
+  border: 0;
 }
 </style>

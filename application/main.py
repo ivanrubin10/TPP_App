@@ -1,18 +1,13 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 from camera import capture_image
 from flask_cors import CORS
 from tflite_detector import tflite_detect_image
 from flask_sqlalchemy import SQLAlchemy
 from flask_marshmallow import Marshmallow
 from marshmallow_sqlalchemy import SQLAlchemySchema, auto_field
-from werkzeug.utils import secure_filename
-import os
-from PIL import Image
-import io
-import base64
-import cv2
 
-app = Flask(__name__)
+
+app = Flask(__name__, static_folder='../application-ui/dist', static_url_path='/')
 CORS(app)  # Apply CORS for all routes
 
 # Configure database
@@ -53,12 +48,16 @@ car_logs_schema = CarLogSchema(many=True)
 with app.app_context():
     db.create_all()
 
+@app.route('/')
+def serve_frontend():
+    return send_from_directory(app.static_folder, 'index.html')
+
 @app.route('/capture-image', methods=['GET'])
 def capture_and_detect():
   try:
     image = capture_image()
-    model_path = 'detect.tflite'
-    label_path = 'labelmap.txt'
+    model_path = './detect.tflite'
+    label_path = './labelmap.txt'
     min_conf_threshold = 0.5
     with open(label_path, 'r') as f:
         labels = [line.strip() for line in f.readlines()]
