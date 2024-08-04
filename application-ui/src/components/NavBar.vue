@@ -1,19 +1,38 @@
-<script setup lang="ts">
-</script>
-
 <template>
   <div class="nav-bar">
     <div class="title">
       <h2>Sistema de visión</h2>
     </div>
     <ul>
-      <li><router-link to="/">Inspección</router-link></li>
-      <li><router-link to="/dashboard">Dashboard</router-link></li>
-      <li><router-link to="/historial">Historial</router-link></li>
-      <li><router-link to="/config">Configuración</router-link></li>
+      <li :class="{ 'active': routePath === '/' }">
+        <router-link to="/">Inspección</router-link>
+      </li>
+      <li :class="{ 'active': routePath === '/dashboard' }">
+        <router-link to="/dashboard">Dashboard</router-link>
+      </li>
+      <li :class="{ 'active': routePath === '/historial' }">
+        <router-link to="/historial">Historial</router-link>
+      </li>
+      <li :class="{ 'active': routePath === '/config' }">
+        <router-link to="/config">Configuración</router-link>
+      </li>
     </ul>
   </div>
 </template>
+
+<script setup lang="ts">
+import { ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
+
+// Get the current route
+const route = useRoute();
+const routePath = ref(route.path);
+
+// Watch the route path and update routePath when it changes
+watch(route, () => {
+  routePath.value = route.path;
+});
+</script>
 
 <style scoped>
 .nav-bar {
@@ -48,7 +67,14 @@ li {
   padding: 20px;
   text-decoration: none;
 }
+.active {
+  background-color: var(--bg-300);
+}
+.active a {
+  text-decoration: underline;
+}
 li a {
+  text-decoration: none;
   color: var(--text-100);
 }
 li:hover {

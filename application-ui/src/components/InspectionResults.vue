@@ -1,21 +1,16 @@
 <template>
     <div class="inspection-results">
+        <InspectionCard title="Imagen Resultante">
+            <div class="inspection-image">
+                <img v-if="modelValue?.resultImage" :src="modelValue?.resultImage" alt="Result Image" />
+            </div>
+        </InspectionCard>
         <InspectionCard class="status" title="Status" :style="getOutcomeStyle(modelValue?.outcome)">
             <div class="outcome">
             <br />
                 <p>expected: {{ modelValue?.expectedPart }}</p>
             <br />
                 <p>result: {{ modelValue?.actualPart }}</p>
-            </div>
-        </InspectionCard>
-        <InspectionCard title="Imagen Capturada">
-            <div class="inspection-image">
-                <img v-if="modelValue?.image" :src="modelValue?.image" alt="Captured Image" />
-            </div>
-        </InspectionCard>
-        <InspectionCard title="Imagen Resultante">
-            <div class="inspection-image">
-                <img v-if="modelValue?.resultImage" :src="modelValue?.resultImage" alt="Result Image" />
             </div>
         </InspectionCard>
     </div>
@@ -56,9 +51,9 @@ function getOutcomeStyle(outcome: string) {
     flex-direction: row;
     gap: 20px;
     width: 100%;
-    height: max-content;
+    height: min-content;
     min-height: 25em;
-    justify-content: space-between;
+    justify-content: space-evenly;
     align-items: center;
     font-size: 1.4em;
 }

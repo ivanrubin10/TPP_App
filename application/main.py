@@ -23,6 +23,7 @@ class CarLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     car_id = db.Column(db.String(50), unique=True, nullable=False)
     car_info = db.Column(db.String(200), nullable=False)
+    date = db.Column(db.String(50), nullable=False)
     original_image_path = db.Column(db.String(200), nullable=False)
     result_image_path = db.Column(db.String(200), nullable=False)
     outcome = db.Column(db.String(200), nullable=False)
@@ -36,6 +37,7 @@ class CarLogSchema(SQLAlchemySchema):
     id = auto_field()
     car_id = auto_field()
     car_info = auto_field()
+    date = auto_field()
     original_image_path = auto_field()
     result_image_path = auto_field()
     outcome = auto_field()
@@ -84,6 +86,7 @@ def update_item():
         if car_log:
             car_log.car_id = data['car_id']
             car_log.car_info = data['car_info']
+            car_log.date = data['date']
             car_log.original_image_path = data['original_image_path']
             car_log.result_image_path = data['result_image_path']
             car_log.outcome = data['outcome']
@@ -93,6 +96,7 @@ def update_item():
                 'id': car_log.id,
                 'car_id': car_log.car_id,
                 'car_info': car_log.car_info,
+                'date': car_log.date,
                 'original_image_path': car_log.original_image_path,
                 'result_image_path': car_log.result_image_path,
                 'outcome': car_log.outcome,
@@ -111,6 +115,7 @@ def add_log():
         new_log = CarLog(
             car_id=data['car_id'],
             car_info=data['car_info'],
+            date=data['date'],
             original_image_path=data['original_image_path'],
             result_image_path=data['result_image_path'],
             outcome=data['outcome']
@@ -123,6 +128,7 @@ def add_log():
             'id': new_log.id,
             'car_id': new_log.car_id,
             'car_info': new_log.car_info,
+            'date': new_log.date,
             'original_image_path': new_log.original_image_path,
             'result_image_path': new_log.result_image_path,
             'outcome': new_log.outcome,

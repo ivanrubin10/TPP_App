@@ -6,9 +6,10 @@
     </div>
     <InspectionResults v-model="selectedItem"/>
     <div class="inspection-footer">
-      <FalseOutcomeButton @click="noEsDefecto(selectedItem)" text="No es defecto"/>
-      <FalseOutcomeButton @click="esDefecto(selectedItem)" text="Es defecto"/>
-      <button @click="handleClick">Capture Image</button>
+      <FalseOutcomeButton v-if="!selectedItem.resultImage" @click="handleClick" text="Capture Image" />
+      <FalseOutcomeButton v-else @click="handleClick" text="Re-capture Image"/>
+      <FalseOutcomeButton v-if="selectedItem.outcome !== 'success'" @click="noEsDefecto(selectedItem)" text="No es defecto"/>
+      <FalseOutcomeButton v-if="selectedItem.outcome !== 'failure'" @click="esDefecto(selectedItem)" text="Es defecto"/>
     </div>
   </div>
   <div class="container" v-else>
@@ -76,6 +77,8 @@ const handleClick = async () => {
     const data = await captureImage();
     console.log('Captured data:', data);
 
+    const currentDate = new Date();
+    selectedItem.value.date = `${currentDate.getDate()}-${currentDate.getMonth() + 1}-${currentDate.getFullYear()} ${currentDate.getHours()}:${currentDate.getMinutes()}:${currentDate.getSeconds()}`;
     selectedItem.value.image  = data.image;
     detectedObjects.value = data.objects;
     selectedItem.value.resultImage = data.resultImage;
@@ -91,6 +94,7 @@ const handleClick = async () => {
         id: carExists.car_log.id,
         car_id: carId,
         car_info: selectedItem.value.info,
+        date: selectedItem.value.date,
         // Assuming image paths are stored in the database:
         original_image_path: data.image, // Update original image path if needed
         result_image_path: data.resultImage, // Update result image path
@@ -102,6 +106,7 @@ const handleClick = async () => {
       const newLog = {
         car_id: carId,
         car_info: selectedItem.value.info,
+        date: selectedItem.value.date,
         original_image_path: data.image, // Store the new image path
         result_image_path: data.resultImage, // Store the new result image path
         outcome: selectedItem.value.outcome,
@@ -129,7 +134,7 @@ function noEsDefecto(item: any) {
   background-color: var(--bg-100);
   padding: 0 15em;
   padding-top: 50px;
-  margin-top: 4em;
+  margin-top: 2em;
   color: #f5f5f5;
   font-family: sans-serif;
   display: flex;
@@ -138,27 +143,27 @@ function noEsDefecto(item: any) {
 }
 
 .inspection-header {
-  margin-top: 2rem;
+  margin-top: 1rem;
   width: 100%;
   height: min-content;
   background-color: var(--bg-300);
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 50px 50px;
+  padding: 30px 50px;
   border-radius: 20px;
   font-size: 1.4em;
 }
 
 .inspection-footer {
   width: 100%;
-  height: 6em;
+  height: 5em;
   background-color: var(--bg-300);
   display: flex;
-  justify-content: space-evenly;
+  justify-content: space-around;
   align-items: center;
-  margin-bottom: 100px;
-  padding: 50px 50px;
+  margin-bottom: 20px;
+  padding: 40px 50px;
   border-radius: 20px;
   font-size: 1.4em;
 }

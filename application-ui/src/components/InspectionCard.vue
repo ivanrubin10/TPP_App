@@ -19,7 +19,7 @@ defineProps({
 
 <style scoped>
 .inspection-card {
-    width: 100%;
+    width: 35%;
     height: 100%;
     background-color: var(--bg-200);
     border: var(--text-200) 2px solid;
