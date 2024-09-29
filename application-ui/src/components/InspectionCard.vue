@@ -25,6 +25,8 @@ defineProps({
     border: var(--text-200) 2px solid;
     padding: 20px;
     border-radius: 20px;
+    display: flex;
+    flex-direction: column;
 }
 .inspection-card p {
     font-weight: bold;

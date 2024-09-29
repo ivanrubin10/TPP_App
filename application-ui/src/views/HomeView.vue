@@ -74,6 +74,7 @@ const handleItemClicked = (item: any) => {
 
 const handleClick = async () => {
   try {
+    console.log("antes");
     const data = await captureImage();
     console.log('Captured data:', data);
 

@@ -50,22 +50,27 @@ car_logs_schema = CarLogSchema(many=True)
 with app.app_context():
     db.create_all()
 
+min_conf_threshold = 0.5  # Default value
+
 @app.route('/')
 def serve_frontend():
     return send_from_directory(app.static_folder, 'index.html')
 
 @app.route('/capture-image', methods=['GET'])
 def capture_and_detect():
+  global min_conf_threshold
   try:
+    print("Capturing image...")
     image = capture_image()
+    print("Image captured!")
     model_path = './detect.tflite'
     label_path = './labelmap.txt'
-    min_conf_threshold = 0.5
     with open(label_path, 'r') as f:
         labels = [line.strip() for line in f.readlines()]
 
+    print(min_conf_threshold)
     result_image, detected_objects = tflite_detect_image(model_path, image, labels, min_conf_threshold)
-
+    print("Objects detected!")
     return jsonify({'image': image, 'objects': detected_objects, 'result_image': result_image})
   except Exception as e:
     return jsonify({'error': str(e)}), 500  # Internal Server Error
@@ -145,6 +150,31 @@ def get_logs():
     all_logs = CarLog.query.all()
     result = car_logs_schema.dump(all_logs)
     return jsonify(result)
+
+#   const saveConfig = async (config) => {
+#     try {
+#       const response = await axios.post(`${baseUrl}/config`, config)
+#       return response.data
+#     } catch (error) {
+#       console.error('Error saving config:', error)
+#       throw error
+#     }
+#   }
+# this is how its called from the front end
+
+@app.route('/config', methods=['GET'])
+def get_config():
+    return jsonify({'min_conf_threshold': min_conf_threshold})
+
+@app.route('/config', methods=['POST'])
+def save_config():
+    global min_conf_threshold
+    try:
+        data = request.get_json()
+        min_conf_threshold = data.get('min_conf_threshold', min_conf_threshold)
+        return jsonify({'message': 'Config saved successfully', 'min_conf_threshold': min_conf_threshold})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)

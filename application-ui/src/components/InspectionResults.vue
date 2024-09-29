@@ -1,9 +1,7 @@
 <template>
     <div class="inspection-results">
         <InspectionCard title="Imagen Resultante">
-            <div class="inspection-image">
-                <img v-if="modelValue?.resultImage" :src="modelValue?.resultImage" alt="Result Image" />
-            </div>
+            <OutcomeImage v-if="modelValue?.resultImage" :imageSrc="modelValue?.resultImage" />
         </InspectionCard>
         <InspectionCard class="status" title="Status" :style="getOutcomeStyle(modelValue?.outcome)">
             <div class="outcome">
@@ -19,6 +17,7 @@
 <script lang="ts" setup>
 import { ref, watch } from 'vue';
 import InspectionCard from './InspectionCard.vue';
+import OutcomeImage from './OutcomeImage.vue';
 
 const props = defineProps({
     modelValue: {
@@ -57,21 +56,6 @@ function getOutcomeStyle(outcome: string) {
     align-items: center;
     font-size: 1.4em;
 }
-
-.inspection-image {
-    height: 90%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin: 20px;
-}
-
-img {
-    max-width: 100%;
-    max-height: 100%;
-    object-fit: contain;
-}
-
 .status .outcome {
     height: 100%;
     padding-bottom: 8%;

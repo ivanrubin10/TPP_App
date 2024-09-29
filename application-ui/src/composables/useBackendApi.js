@@ -68,6 +68,25 @@ export function useBackendApi() {
     }
   }
 
+  const getConfig = async () => {
+    try {
+      const response = await axios.get(`${baseUrl}/config`)
+      return response.data
+    } catch (error) {
+      console.error('Error fetching config:', error)
+      throw error
+    }
+  }
+  const saveConfig = async (config) => {
+    try {
+      const response = await axios.post(`${baseUrl}/config`, config)
+      return response.data
+    } catch (error) {
+      console.error('Error saving config:', error)
+      throw error
+    }
+  }
+
   return {
     captureImage,
     capturedImage,
@@ -77,6 +96,8 @@ export function useBackendApi() {
     logs,
     checkCarExists,
     updateItem,
-    addLog
+    addLog,
+    getConfig,
+    saveConfig,
   }
 }
