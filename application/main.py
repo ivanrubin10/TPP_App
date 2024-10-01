@@ -63,8 +63,8 @@ def capture_and_detect():
     print("Capturing image...")
     image = capture_image()
     print("Image captured!")
-    model_path = './detect.tflite'
-    label_path = './labelmap.txt'
+    model_path = './dist/detect.tflite'
+    label_path = './dist/labelmap.txt'
     with open(label_path, 'r') as f:
         labels = [line.strip() for line in f.readlines()]
 

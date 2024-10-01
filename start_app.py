@@ -4,7 +4,7 @@ import time
 from threading import Thread
 
 # Path to your Flask application
-FLASK_APP = "../application/main.py"
+FLASK_APP = "./application/main.py"
 # URL to open in the browser (this should be the Flask server address)
 URL = "http://127.0.0.1:5000"
 
