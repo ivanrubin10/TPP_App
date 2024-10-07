@@ -7,7 +7,7 @@ from flask_marshmallow import Marshmallow
 from marshmallow_sqlalchemy import SQLAlchemySchema, auto_field
 
 
-app = Flask(__name__, static_folder='../application-ui/dist', static_url_path='/')
+app = Flask(__name__, static_folder='../application-ui', static_url_path='/')
 CORS(app)  # Apply CORS for all routes
 
 # Configure database
@@ -63,8 +63,8 @@ def capture_and_detect():
     print("Capturing image...")
     image = capture_image()
     print("Image captured!")
-    model_path = './dist/detect.tflite'
-    label_path = './dist/labelmap.txt'
+    model_path = './application/detect.tflite'
+    label_path = './application/labelmap.txt'
     with open(label_path, 'r') as f:
         labels = [line.strip() for line in f.readlines()]
 
