@@ -5,11 +5,11 @@
         <table>
           <thead>
             <tr>
-              <th>Car ID</th>
-              <th>Date</th>
-              <th>Expected Part</th>
-              <th>Actual Part</th>
-              <th>Outcome</th>
+              <th>ID</th>
+              <th>Fecha</th>
+              <th>Parte Esperada</th>
+              <th>Parte Resultante</th>
+              <th>Resultado</th>
             </tr>
           </thead>
           <tbody>

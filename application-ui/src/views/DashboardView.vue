@@ -5,40 +5,40 @@
         <div class="dashboard-grid">
             <!-- Summary Cards -->
             <div class="summary-card">
-                <h3>Total Inspections</h3>
+                <h3>Inspecciones totales</h3>
                 <div class="stat">{{ items.length }}</div>
             </div>
             <div class="summary-card">
-                <h3>Pass Rate</h3>
+                <h3>Tasa de éxito</h3>
                 <div class="stat">{{ Math.round((goodCount / items.length) * 100) || 0 }}%</div>
             </div>
             <div class="summary-card">
-                <h3>Fail Rate</h3>
+                <h3>Tasa de fallos</h3>
                 <div class="stat">{{ Math.round((noGoodCount / items.length) * 100) || 0 }}%</div>
             </div>
 
             <!-- Charts -->
             <div class="chart-container" @click="openModal('pie')">
-                <h3>Inspection Results</h3>
+                <h3>Resultados de inspección</h3>
                 <Pie :data="pieChartData" :options="pieChartOptions" />
             </div>
 
             <div class="chart-container" @click="openModal('line')">
-                <h3>Daily Inspections</h3>
+                <h3>Inspecciones diarias</h3>
                 <Line :data="lineChartData" :options="lineChartOptions" />
             </div>
 
             <!-- Table -->
             <div class="table-container">
-                <h3>Recent Inspections</h3>
+                <h3>Inspecciones recientes</h3>
                 <table>
                     <thead>
                         <tr>
-                            <th>Car ID</th>
-                            <th>Date</th>
-                            <th>Expected Part</th>
-                            <th>Actual Part</th>
-                            <th>Outcome</th>
+                            <th>ID</th>
+                            <th>Fecha</th>
+                            <th>Parte Esperada</th>
+                            <th>Parte Resultante</th>
+                            <th>Resultado</th>
                         </tr>
                     </thead>
                     <tbody>

@@ -127,9 +127,10 @@ def get_status():
 
 @app.after_request
 def start_background_task(response):
+    global config
     if not hasattr(app, 'background_thread_started'):
         app.background_thread_started = True
-        socketio.start_background_task(start_client)  # Use this instead of threading
+        socketio.start_background_task(start_client(config['plc_host'], config['plc_port']))  # Use this instead of threading
     return response
 
 @app.route('/')

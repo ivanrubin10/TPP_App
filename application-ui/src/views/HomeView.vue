@@ -116,6 +116,9 @@ onMounted(async () => {
       resultImage: newItem.result_image_path,
       date: newItem.date
     });
+
+    selectedItem.value = items.value[items.value.length - 1];
+    handleClick();
   });
 
 
