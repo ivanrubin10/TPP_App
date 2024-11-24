@@ -7,8 +7,8 @@
       </div>
       <InspectionResults v-model="selectedItem" />
       <div class="inspection-footer">
-        <FalseOutcomeButton v-if="!selectedItem.resultImage" @click="handleClick" text="Capture Image" />
-        <FalseOutcomeButton v-else @click="handleClick" text="Re-capture Image" />
+        <FalseOutcomeButton v-if="!selectedItem.resultImage" @click="handleClick" text="Detectar" />
+        <FalseOutcomeButton v-else @click="handleClick" text="Detectar nuevamente" />
         <FalseOutcomeButton v-show="selectedItem.outcome === 'NOGOOD'" @click="noEsDefecto(selectedItem)"
           text="No es defecto" />
         <FalseOutcomeButton v-show="selectedItem.outcome === 'GOOD'" @click="esDefecto(selectedItem)"
@@ -17,7 +17,7 @@
     </div>
     <div class="container" v-else>
       <div class="no-item-selected">
-        Please select a car from the list to view its status
+        Por favor seleccione un coche de la lista para ver su estado
       </div>
     </div>
     <CarsFooter :items="items" v-model="selectedItem" @item-clicked="handleItemClicked" />
@@ -71,7 +71,7 @@ const { captureImage,
 onMounted(async () => {
   const socket = io('http://localhost:5000'); // Connect to Flask WebSocket server
 
-  socket.on('plc_message', async (data) => {
+  socket.on('plc_message', async (data: any) => {
     console.log('Received message from PLC:', data.message);
     // Handle the received message in your frontend as needed
     const currentDate = new Date();
@@ -173,6 +173,7 @@ const handleClick = async () => {
     } else {
       selectedItem.value.actualPart = "";
     }
+    console.log("actualPart: ", selectedItem.value.actualPart);
 
     if (selectedItem.value.actualPart === selectedItem.value.expectedPart) {
       selectedItem.value.outcome = "GOOD";

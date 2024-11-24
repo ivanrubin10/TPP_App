@@ -3,12 +3,12 @@
         <InspectionCard title="Imagen Resultante">
             <OutcomeImage v-if="modelValue?.resultImage" :imageSrc="modelValue?.resultImage" />
         </InspectionCard>
-        <InspectionCard class="status" title="Status" :style="getOutcomeStyle(modelValue?.outcome)">
+        <InspectionCard class="status" title="Estado" :style="getOutcomeStyle(modelValue?.outcome)">
             <div class="outcome">
             <br />
-                <p>expected: {{ modelValue?.expectedPart }}</p>
+                <p>Esperado: {{ modelValue?.expectedPart }}</p>
             <br />
-                <p>result: {{ modelValue?.actualPart }}</p>
+                <p>Resultado: {{ modelValue?.actualPart }}</p>
             </div>
         </InspectionCard>
     </div>

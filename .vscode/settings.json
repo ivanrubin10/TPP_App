@@ -1,5 +1,13 @@
 {
     "python.analysis.extraPaths": [
         "./application"
+    ],
+    "cSpell.words": [
+        "axios",
+        "jsonify",
+        "labelmap",
+        "nullable",
+        "socketio",
+        "tflite"
     ]
 }

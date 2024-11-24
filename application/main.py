@@ -55,7 +55,11 @@ car_logs_schema = CarLogSchema(many=True)
 with app.app_context():
     db.create_all()
 
-min_conf_threshold = 0.5  # Default value
+config = {
+    "min_conf_threshold": 0.7,
+    "plc_host": "127.0.0.1",  # Default IP as a string
+    "plc_port": 12345         # Default port as a number
+}
 
 @socketio.on('connect')
 def handle_connect():
@@ -72,22 +76,45 @@ def start_client():
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
         client_socket.connect((host, port))
-        print("Conectado al PLC")
-        
+client_thread = None
+client_socket = None
+
+def start_client(host, port):
+    global client_socket, client_thread
+
+    # Close any existing client socket
+    if client_socket:
         try:
+            client_socket.close()
+        except Exception as e:
+            print(f"Error closing previous socket: {e}")
+
+    def client_logic():
+        global client_socket
+        try:
+            # Create and connect a new client socket
+            client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            client_socket.connect((host, port))
+            print(f"Connected to PLC at {host}:{port}")
+            
+            # Keep the connection alive
             while True:
                 data = client_socket.recv(1024)
                 if not data:
                     break
-                print("Recibido:", data.decode())
 
-                # Trigger a backend function after receiving a message
-                handle_plc_message(data.decode())
+                message = data.decode()
+                print(f"Received message: {message}")
+
+                # Call handle_plc_message to emit the event
+                handle_plc_message(message)
 
         except Exception as e:
-            print("Error: ", e)
-        finally:
-            print("Conexión cerrada")
+            print(f"Client error: {e}")
+
+    # Start the client in a new thread
+    client_thread = threading.Thread(target=client_logic, daemon=True)
+    client_thread.start()
 
 def handle_plc_message(message):
     print("Message received from PLC:", message)
@@ -111,7 +138,7 @@ def serve_frontend():
 
 @app.route('/capture-image', methods=['GET'])
 def capture_and_detect():
-  global min_conf_threshold
+  global config
   try:
     print("Capturing image...")
     image = capture_image()
@@ -128,8 +155,8 @@ def capture_and_detect():
         with open(label_path, 'r') as f:
             labels = [line.strip() for line in f.readlines()]
 
-    print(min_conf_threshold)
-    result_image, detected_objects = tflite_detect_image(model_path, image, labels, min_conf_threshold)
+    print(config['min_conf_threshold'])
+    result_image, detected_objects = tflite_detect_image(model_path, image, labels, config['min_conf_threshold'])
     print("Objects detected!")
     return jsonify({'image': image, 'objects': detected_objects, 'result_image': result_image})
   except Exception as e:
@@ -224,23 +251,30 @@ def get_logs():
 #   }
 # this is how its called from the front end
 
-@app.route('/config', methods=['GET'])
-def get_config():
-    return jsonify({'min_conf_threshold': min_conf_threshold})
+@app.route('/config', methods=['GET', 'POST'])
+def handle_config():
+    if request.method == 'GET':
+        # Return the current configuration
+        return jsonify(config)
 
-@app.route('/config', methods=['POST'])
-def save_config():
-    global min_conf_threshold
-    try:
-        data = request.get_json()
-        new_threshold = data.get('min_conf_threshold', min_conf_threshold)
-        if isinstance(new_threshold, (int, float)) and 0 <= new_threshold <= 1:
-            min_conf_threshold = new_threshold
-            return jsonify({'message': 'Config saved successfully', 'min_conf_threshold': min_conf_threshold})
-        else:
-            return jsonify({'error': 'Invalid min_conf_threshold value'}), 400
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    elif request.method == 'POST':
+        # Update configuration with incoming data
+        data = request.json
+        if 'min_conf_threshold' in data:
+            config['min_conf_threshold'] = float(data['min_conf_threshold'])
+        if 'plc_host' in data:
+            config['plc_host'] = str(data['plc_host'])
+        if 'plc_port' in data:
+            try:
+                config['plc_port'] = int(data['plc_port'])
+            except ValueError:
+                return jsonify({"error": "plc_port must be an integer"}), 400
+
+        # Restart the client with the updated configuration
+        start_client(config['plc_host'], config['plc_port'])    
+        
+        return jsonify({"message": "Configuration updated successfully"}), 200
+
 
 
 if __name__ == '__main__':

@@ -11,7 +11,7 @@
         <router-link to="/">Inspección</router-link>
       </li>
       <li :class="{ 'active': routePath === '/dashboard' }">
-        <router-link to="/dashboard">Dashboard</router-link>
+        <router-link to="/dashboard">Panel</router-link>
       </li>
       <li :class="{ 'active': routePath === '/historial' }">
         <router-link to="/historial">Historial</router-link>
@@ -183,9 +183,6 @@ nav a:first-of-type {
   .mobile-menu {
     display: block;
   }
-  .nav-bar {
-  }
-
   .nav-bar ul {
     display: none;
     position: absolute;

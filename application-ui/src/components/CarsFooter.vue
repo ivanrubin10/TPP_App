@@ -5,7 +5,7 @@
                 @click="handleItemClick(index)">
                 <div class="footer-item-content">
                     <div class="footer-item-header">
-                        <span class="footer-item-header-name">Expected: {{ item.expectedPart }}</span>
+                        <span class="footer-item-header-name">Esperado: {{ item.expectedPart }}</span>
                     </div>
                     <img class="footer-item-image" src="@/assets/Car-2-icon.png" alt="Car Image">
                     <div class="footer-footer">
