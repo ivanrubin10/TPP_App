@@ -1,23 +1,27 @@
 <template>
-<div class="container" v-if="selectedItem">
-    <div class="inspection-header">
-      <p>{{ selectedItem.id }} - {{ selectedItem.name }}</p>
-      <p>{{ selectedItem.date }}</p>
+  <div class="content">
+    <div class="container" v-if="selectedItem">
+      <div class="inspection-header">
+        <p>{{ selectedItem.id }}</p>
+        <p>{{ selectedItem.date }}</p>
+      </div>
+      <InspectionResults v-model="selectedItem" />
+      <div class="inspection-footer">
+        <FalseOutcomeButton v-if="!selectedItem.resultImage" @click="handleClick" text="Capture Image" />
+        <FalseOutcomeButton v-else @click="handleClick" text="Re-capture Image" />
+        <FalseOutcomeButton v-show="selectedItem.outcome === 'NOGOOD'" @click="noEsDefecto(selectedItem)"
+          text="No es defecto" />
+        <FalseOutcomeButton v-show="selectedItem.outcome === 'GOOD'" @click="esDefecto(selectedItem)"
+          text="Es defecto" />
+      </div>
     </div>
-    <InspectionResults v-model="selectedItem"/>
-    <div class="inspection-footer">
-      <FalseOutcomeButton v-if="!selectedItem.resultImage" @click="handleClick" text="Capture Image" />
-      <FalseOutcomeButton v-else @click="handleClick" text="Re-capture Image"/>
-      <FalseOutcomeButton v-if="selectedItem.outcome !== 'success'" @click="noEsDefecto(selectedItem)" text="No es defecto"/>
-      <FalseOutcomeButton v-if="selectedItem.outcome !== 'failure'" @click="esDefecto(selectedItem)" text="Es defecto"/>
+    <div class="container" v-else>
+      <div class="no-item-selected">
+        Please select a car from the list to view its status
+      </div>
     </div>
+    <CarsFooter :items="items" v-model="selectedItem" @item-clicked="handleItemClicked" />
   </div>
-  <div class="container" v-else>
-    <div class="no-item-selected">
-      Please select a car from the list to view its status
-    </div>
-  </div>
-  <CarsFooter :items="items" v-model="selectedItem" @item-clicked="handleItemClicked" />
 </template>
 
 
@@ -27,45 +31,122 @@ import CarsFooter from '../components/CarsFooter.vue'
 import FalseOutcomeButton from '../components/FalseOutcomeButton.vue'
 import InspectionResults from '../components/InspectionResults.vue'
 import { onMounted, ref } from 'vue';
+import io from 'socket.io-client';
 
-const items = ref([
-  { id: "058571", name: "T-Cross 1.0 COMFO", expectedPart: "Capo tipo 1", info: "128cv AGP, Rear view camera, Bluetooth", date: "2021-03-17 11:39:35", outcome: "success", image: "", resultImage: "" },
-  { id: "058482", name: "T-Cross 1.0 TPLUS", expectedPart: "Capo tipo 2", info: "125cv ASF, Front and side view cameras, Navigation", date: "2021-03-17 11:41:00", outcome: "success", image: "", resultImage: "" },
-  { id: "058673", name: "T-Cross 1.0 TURBO", expectedPart: "Capo tipo 3", info: "125cv A6F, Heated seats, Keyless entry", date: "2021-03-17 11:41:01", outcome: "success", image: "", resultImage: ""},
-  { id: "058654", name: "TCross 1.6 COMFO", expectedPart: "Capo tipo 2", info: "110cv AGF, Rear parking camera, Leather seats", date: "2021-03-17 11:41:02", outcome: "success", image: "", resultImage: "" },
-  { id: "058672", name: "T-Cross 1.0 COMFO XTREME", expectedPart: "Capo tipo 1", info: "125cv A6F, 360 degree camera, 4G connectivity", date: "2021-03-17 11:41:03", outcome: "success", image: "", resultImage: "" },
-  { id: "058651", name: "TCross 1.6 OMNI", expectedPart: "Capo tipo 3", info: "110cv AGF, Lane departure warning, 7-inch touchscreen", date: "2021-03-17 11:41:04", outcome: "success", image: "", resultImage: "" },
-  { id: "058652", name: "TCross 1.6 COMBO", expectedPart: "Capo tipo 3", info: "110cv AGF, Rear spoiler, Front fog lamps", date: "2021-03-17 11:41:05", outcome: "failure", image: "", resultImage: "" },
-  { id: "058653", name: "TCross 1.6 LUXURY", expectedPart: "Capo tipo 2", info: "110cv AGF, Leather steering wheel, Heated mirrors", date: "2021-03-17 11:41:06", outcome: "success", image: "", resultImage: "" },
-  { id: "058654", name: "TCross 1.6 SUPER", expectedPart: "Capo tipo 2", info: "110cv AGF, Rear view camera, Blind spot monitoring", date: "2021-03-17 11:41:07", outcome: "success", image: "", resultImage: "" },
-  { id: "058655", name: "TCross 1.6 ULTRA", expectedPart: "Capo tipo 1", info: "110cv AGF, Heated front seats, Adaptive cruise control", date: "2021-03-17 11:41:08", outcome: "success", image: "", resultImage: "" },
-]);
+
+type Item = {
+  id: string;
+  expectedPart: string;
+  actualPart: string;
+  outcome: string;
+  image: string;
+  resultImage: string;
+  date: string;
+}
+
+const items = ref<Item[]>([]);
+/* const items = ref([
+  { id: "058571", expectedPart: "Capo tipo 1", actualPart: "", outcome: "", image: "", resultImage: "", date: "2021-03-17 11:39:35" },
+  { id: "058482", expectedPart: "Capo tipo 2", actualPart: "", outcome: "", image: "", resultImage: "", date: "2021-03-17 11:41:00" },
+  { id: "058673", expectedPart: "Capo tipo 3", actualPart: "", outcome: "", image: "", resultImage: "", date: "2021-03-17 11:41:01" },
+  { id: "058654", expectedPart: "Capo tipo 2", actualPart: "", outcome: "", image: "", resultImage: "", date: "2021-03-17 11:41:02" },
+  { id: "058672", expectedPart: "Capo tipo 1", actualPart: "", outcome: "", image: "", resultImage: "", date: "2021-03-17 11:41:03" },
+  { id: "058651", expectedPart: "Capo tipo 3", actualPart: "", outcome: "", image: "", resultImage: "", date: "2021-03-17 11:41:04" },
+  { id: "058652", expectedPart: "Capo tipo 3", actualPart: "", outcome: "", image: "", resultImage: "", date: "2021-03-17 11:41:05" },
+  { id: "058653", expectedPart: "Capo tipo 2", actualPart: "", outcome: "", image: "", resultImage: "", date: "2021-03-17 11:41:06" },
+  { id: "058654", expectedPart: "Capo tipo 2", actualPart: "", outcome: "", image: "", resultImage: "", date: "2021-03-17 11:41:07" },
+  { id: "058655", expectedPart: "Capo tipo 1", actualPart: "", outcome: "", image: "", resultImage: "", date: "2021-03-17 11:41:08" },
+]); */
 
 const fetchedItems = ref();
-
 const selectedItem = ref();
 
 const { captureImage,
-    detectedObjects,
-    fetchLogs,
-    checkCarExists,
-    updateItem,
-    addLog  } = useBackendApi()
+  detectedObjects,
+  fetchLogs,
+  checkCarExists,
+  updateItem,
+  addLog } = useBackendApi()
 
 onMounted(async () => {
+  const socket = io('http://localhost:5000'); // Connect to Flask WebSocket server
+
+  socket.on('plc_message', async (data) => {
+    console.log('Received message from PLC:', data.message);
+    // Handle the received message in your frontend as needed
+    const currentDate = new Date();
+    const formattedDate = `${String(currentDate.getDate()).padStart(2, '0')}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${currentDate.getFullYear()} ${String(currentDate.getHours()).padStart(2, '0')}:${String(currentDate.getMinutes()).padStart(2, '0')}:${String(currentDate.getSeconds()).padStart(2, '0')}`;
+    
+    let expectedPart = '';
+    switch(data.message) {
+      case '01':
+        expectedPart = 'Capo tipo 1';
+        break;
+      case '05':
+        expectedPart = 'Capo tipo 2'; 
+        break;
+      case '08':
+        expectedPart = 'Capo tipo 3';
+        break;
+      default:
+        console.warn('Unknown message type:', data.message);
+        return;
+    }
+
+    const newItem = {
+      car_id: Math.random().toString(36).substr(2, 6), // Generate random ID
+      date: formattedDate,
+      expected_part: expectedPart,
+      actual_part: '',
+      original_image_path: '',
+      result_image_path: '',
+      outcome: ''
+    };
+
+    // Add to database
+    await addLog(newItem);
+
+    // Add to local items array
+    items.value.push({
+      id: newItem.car_id,
+      expectedPart: newItem.expected_part,
+      actualPart: newItem.actual_part,
+      outcome: newItem.outcome,
+      image: newItem.original_image_path,
+      resultImage: newItem.result_image_path,
+      date: newItem.date
+    });
+  });
+
+
   await fetchLogs().then((response) => {
+    console.log(response);
     fetchedItems.value = response;
+    response.forEach((item: any) => {
+      items.value.push({
+        id: item.car_id,
+        expectedPart: item.expected_part,
+        actualPart: item.actual_part,
+        outcome: item.outcome,
+        image: item.original_image_path,
+        resultImage: item.result_image_path,
+        date: item.date,
+      });
+    })
     items.value.forEach((item) => {
       const foundItem = fetchedItems.value.find((fetchedItem: { car_id: string; }) => fetchedItem.car_id === item.id);
       if (foundItem) {
         item.image = foundItem.original_image_path;
         item.resultImage = foundItem.result_image_path;
+        item.outcome = foundItem.outcome;
+        item.actualPart = foundItem.actual_part;
+        item.date = foundItem.date;
       }
     });
   });
-  console.log("fetched: ", fetchedItems.value[0])
+  console.log("fetched: ", fetchedItems.value)
   // assign the images to the items
-  
+
 });
 
 const handleItemClicked = (item: any) => {
@@ -74,16 +155,30 @@ const handleItemClicked = (item: any) => {
 
 const handleClick = async () => {
   try {
-    console.log("antes");
     const data = await captureImage();
     console.log('Captured data:', data);
 
     const currentDate = new Date();
     selectedItem.value.date = `${currentDate.getDate()}-${currentDate.getMonth() + 1}-${currentDate.getFullYear()} ${currentDate.getHours()}:${currentDate.getMinutes()}:${currentDate.getSeconds()}`;
-    selectedItem.value.image  = data.image;
+    selectedItem.value.image = data.image;
     detectedObjects.value = data.objects;
     selectedItem.value.resultImage = data.resultImage;
 
+    if (data.objects.length === 0) {
+      selectedItem.value.actualPart = "Capo tipo 1";
+    } else if (data.objects.length === 2) {
+      selectedItem.value.actualPart = "Capo tipo 2";
+    } else if (data.objects.length === 3) {
+      selectedItem.value.actualPart = "Capo tipo 3";
+    } else {
+      selectedItem.value.actualPart = "";
+    }
+
+    if (selectedItem.value.actualPart === selectedItem.value.expectedPart) {
+      selectedItem.value.outcome = "GOOD";
+    } else {
+      selectedItem.value.outcome = "NOGOOD";
+    }
     const carId = selectedItem.value.id;
 
     // Check if the car exists in the database
@@ -94,9 +189,9 @@ const handleClick = async () => {
       const itemToUpdate = {
         id: carExists.car_log.id,
         car_id: carId,
-        car_info: selectedItem.value.info,
         date: selectedItem.value.date,
-        // Assuming image paths are stored in the database:
+        expected_part: selectedItem.value.expectedPart,
+        actual_part: selectedItem.value.actualPart,
         original_image_path: data.image, // Update original image path if needed
         result_image_path: data.resultImage, // Update result image path
         outcome: selectedItem.value.outcome,
@@ -106,8 +201,9 @@ const handleClick = async () => {
       // Add a new log with captured images and status
       const newLog = {
         car_id: carId,
-        car_info: selectedItem.value.info,
         date: selectedItem.value.date,
+        expected_part: selectedItem.value.expectedPart,
+        actual_part: selectedItem.value.actualPart,
         original_image_path: data.image, // Store the new image path
         result_image_path: data.resultImage, // Store the new result image path
         outcome: selectedItem.value.outcome,
@@ -129,17 +225,20 @@ function noEsDefecto(item: any) {
 </script>
 
 <style scoped>
+.content {
+  height: 100%;
+  display: grid;
+  grid-template-rows: 1fr auto;
+}
+
 .container {
-  height: 80vh;
-  overflow-y: auto; /* Enable vertical scrolling */
+  overflow-y: auto;
+  /* Enable vertical scrolling */
   background-color: var(--bg-100);
   padding: 0 15em;
   padding-top: 50px;
-  margin-top: 2em;
   color: #f5f5f5;
   font-family: sans-serif;
-  display: flex;
-  flex-direction: column;
   gap: 10px;
 }
 

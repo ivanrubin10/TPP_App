@@ -5,10 +5,7 @@
                 @click="handleItemClick(index)">
                 <div class="footer-item-content">
                     <div class="footer-item-header">
-                        <span class="footer-item-header-name">{{ item.name }}</span>
-                        <div class="footer-item-body">
-                            <span class="footer-item-body-info">{{ item.info }}</span>
-                        </div>
+                        <span class="footer-item-header-name">Expected: {{ item.expectedPart }}</span>
                     </div>
                     <img class="footer-item-image" src="@/assets/Car-2-icon.png" alt="Car Image">
                     <div class="footer-footer">
@@ -26,7 +23,7 @@ import { ref, onMounted, onUnmounted } from 'vue';
 
 const props = defineProps({
     items: {
-        type: Array as () => Array<{ id: string, name: string, info: string, date: string, outcome: string }>,
+        type: Array as () => Array<{ id: string, expectedPart: string, actualPart: string, outcome: string,  date: string, }>,
         required: true
     },
     modelValue: {
@@ -82,9 +79,9 @@ function handleItemClick(index: number) {
 }
 
 function getItemStyle(index: number) {
-    if (items.value[index].outcome === 'success') {
+    if (items.value[index].outcome === 'GOOD') {
         return { backgroundImage: 'linear-gradient(180deg, var(--good-100) 0%, var(--good-100) 100%)' };
-    } else if (items.value[index].outcome === 'failure') {
+    } else if (items.value[index].outcome === 'NOGOOD') {
         return { backgroundImage: 'linear-gradient(180deg, var(--no-good-100) 0%, var(--no-good-100) 100%)' };
     }
     return { backgroundColor: 'var(--bg-300)' };
@@ -102,14 +99,12 @@ onUnmounted(() => {
 <style scoped>
 .footer-container {
     width: 100%;
+    height: clamp(150px, 12vw, 250px);
     background-color: var(--bg-200);
-    position: fixed;
-    bottom: 0;
     overflow-x: hidden;
     overflow-y: hidden;
     white-space: nowrap;
     border-top: var(--accent-200) 1px solid;
-    height: 20vh;
     padding: 0 55px;
     /* Set a fixed height to ensure consistent height */
     display: flex;
@@ -127,7 +122,7 @@ onUnmounted(() => {
 
 .footer-item {
     width: 300px;
-    height: 16vh;
+    height: clamp(100px, 10vw, 200px);
     /* Adjust to fit content */
     background-color: var(--good-green);
     color: var(--text-100);
@@ -188,7 +183,7 @@ onUnmounted(() => {
 }
 
 .footer-item-image {
-    width: 9vh;
+    width: 7vw;
     height: auto;
     margin: 0 auto;
     filter: invert(0.8);

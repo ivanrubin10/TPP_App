@@ -40,11 +40,12 @@ const handleSave = async () => {
 
 <style scoped>
 .config {
-    min-height: 100vh;
+    min-height: 100%;
     display: flex;
     justify-content: center;
     align-items: center;
     padding: 20px;
+    background-color: var(--bg-100);
 }
 
 .config-content {
@@ -92,7 +93,7 @@ label {
 
 @media (min-width: 1024px) {
     .config {
-        min-height: 100vh;
+        min-height: 100%;
         display: flex;
         align-items: center;
     }

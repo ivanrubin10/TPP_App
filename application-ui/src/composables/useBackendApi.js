@@ -2,7 +2,7 @@ import axios from 'axios'
 import { ref } from 'vue'
 
 export function useBackendApi() {
-  const baseUrl = 'http://127.0.0.1:5000'
+  const baseUrl = 'http://localhost:5000'
 
   const capturedImage = ref('')
   const detectedObjects = ref([])

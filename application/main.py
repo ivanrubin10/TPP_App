@@ -1,4 +1,7 @@
 from flask import Flask, jsonify, request, send_from_directory
+import socket
+import threading
+from flask_socketio import SocketIO, emit
 from camera import capture_image
 from flask_cors import CORS
 from tflite_detector import tflite_detect_image
@@ -8,7 +11,9 @@ from marshmallow_sqlalchemy import SQLAlchemySchema, auto_field
 
 
 app = Flask(__name__, static_folder='../application-ui', static_url_path='/')
-CORS(app)  # Apply CORS for all routes
+CORS(app)  # Allow specific frontend
+
+socketio = SocketIO(app, cors_allowed_origins="*")  # Allow SocketIO connections from the frontend
 
 # Configure database
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///car_logs.db'
@@ -22,12 +27,12 @@ ma = Marshmallow(app)
 class CarLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     car_id = db.Column(db.String(50), unique=True, nullable=False)
-    car_info = db.Column(db.String(200), nullable=False)
     date = db.Column(db.String(50), nullable=False)
+    expected_part = db.Column(db.String(200), nullable=False)
+    actual_part = db.Column(db.String(200), nullable=False)
     original_image_path = db.Column(db.String(200), nullable=False)
     result_image_path = db.Column(db.String(200), nullable=False)
     outcome = db.Column(db.String(200), nullable=False)
-    timestamp = db.Column(db.DateTime, default=db.func.current_timestamp())
 
 class CarLogSchema(SQLAlchemySchema):
     class Meta:
@@ -36,12 +41,12 @@ class CarLogSchema(SQLAlchemySchema):
 
     id = auto_field()
     car_id = auto_field()
-    car_info = auto_field()
     date = auto_field()
+    expected_part = auto_field()
+    actual_part = auto_field()
     original_image_path = auto_field()
     result_image_path = auto_field()
     outcome = auto_field()
-    timestamp = auto_field()
 
 car_log_schema = CarLogSchema()
 car_logs_schema = CarLogSchema(many=True)
@@ -51,6 +56,54 @@ with app.app_context():
     db.create_all()
 
 min_conf_threshold = 0.5  # Default value
+
+@socketio.on('connect')
+def handle_connect():
+    print('Client connected')
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    print('Client disconnected')
+
+
+def start_client():
+    host = '127.0.0.1'  # IP address of the PLC
+    port = 12345             # Port number
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
+        client_socket.connect((host, port))
+        print("Conectado al PLC")
+        
+        try:
+            while True:
+                data = client_socket.recv(1024)
+                if not data:
+                    break
+                print("Recibido:", data.decode())
+
+                # Trigger a backend function after receiving a message
+                handle_plc_message(data.decode())
+
+        except Exception as e:
+            print("Error: ", e)
+        finally:
+            print("Conexión cerrada")
+
+def handle_plc_message(message):
+    print("Message received from PLC:", message)
+    # Emit a WebSocket event to notify the frontend
+    socketio.emit('plc_message', {'message': message})
+
+@app.route('/status', methods=['GET'])
+def get_status():
+    return jsonify({'status': 'connected to PLC'}), 200
+
+@app.after_request
+def start_background_task(response):
+    if not hasattr(app, 'background_thread_started'):
+        app.background_thread_started = True
+        socketio.start_background_task(start_client)  # Use this instead of threading
+    return response
 
 @app.route('/')
 def serve_frontend():
@@ -63,10 +116,17 @@ def capture_and_detect():
     print("Capturing image...")
     image = capture_image()
     print("Image captured!")
-    model_path = './application/detect.tflite'
-    label_path = './application/labelmap.txt'
-    with open(label_path, 'r') as f:
-        labels = [line.strip() for line in f.readlines()]
+    # Try with application path first, fallback to current directory
+    try:
+        model_path = './application/detect.tflite'
+        label_path = './application/labelmap.txt'
+        with open(label_path, 'r') as f:
+            labels = [line.strip() for line in f.readlines()]
+    except FileNotFoundError:
+        model_path = './detect.tflite'
+        label_path = './labelmap.txt'
+        with open(label_path, 'r') as f:
+            labels = [line.strip() for line in f.readlines()]
 
     print(min_conf_threshold)
     result_image, detected_objects = tflite_detect_image(model_path, image, labels, min_conf_threshold)
@@ -90,8 +150,9 @@ def update_item():
         car_log = CarLog.query.get(data['id'])
         if car_log:
             car_log.car_id = data['car_id']
-            car_log.car_info = data['car_info']
             car_log.date = data['date']
+            car_log.expected_part = data['expected_part']
+            car_log.actual_part = data['actual_part']
             car_log.original_image_path = data['original_image_path']
             car_log.result_image_path = data['result_image_path']
             car_log.outcome = data['outcome']
@@ -100,12 +161,12 @@ def update_item():
             updated_log = {
                 'id': car_log.id,
                 'car_id': car_log.car_id,
-                'car_info': car_log.car_info,
                 'date': car_log.date,
+                'expected_part': car_log.expected_part,
+                'actual_part': car_log.actual_part,
                 'original_image_path': car_log.original_image_path,
                 'result_image_path': car_log.result_image_path,
                 'outcome': car_log.outcome,
-                'timestamp': car_log.timestamp
             }
             return jsonify(updated_log)
         else:
@@ -119,8 +180,9 @@ def add_log():
         data = request.get_json()
         new_log = CarLog(
             car_id=data['car_id'],
-            car_info=data['car_info'],
             date=data['date'],
+            expected_part=data['expected_part'],
+            actual_part=data['actual_part'],
             original_image_path=data['original_image_path'],
             result_image_path=data['result_image_path'],
             outcome=data['outcome']
@@ -132,12 +194,12 @@ def add_log():
         log_dict = {
             'id': new_log.id,
             'car_id': new_log.car_id,
-            'car_info': new_log.car_info,
             'date': new_log.date,
+            'expected_part': new_log.expected_part,
+            'actual_part': new_log.actual_part,
             'original_image_path': new_log.original_image_path,
             'result_image_path': new_log.result_image_path,
             'outcome': new_log.outcome,
-            'timestamp': new_log.timestamp
         }
         
         return jsonify(log_dict)
@@ -171,10 +233,15 @@ def save_config():
     global min_conf_threshold
     try:
         data = request.get_json()
-        min_conf_threshold = data.get('min_conf_threshold', min_conf_threshold)
-        return jsonify({'message': 'Config saved successfully', 'min_conf_threshold': min_conf_threshold})
+        new_threshold = data.get('min_conf_threshold', min_conf_threshold)
+        if isinstance(new_threshold, (int, float)) and 0 <= new_threshold <= 1:
+            min_conf_threshold = new_threshold
+            return jsonify({'message': 'Config saved successfully', 'min_conf_threshold': min_conf_threshold})
+        else:
+            return jsonify({'error': 'Invalid min_conf_threshold value'}), 400
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    app.run(debug=True, host='0.0.0.0', port=5000)

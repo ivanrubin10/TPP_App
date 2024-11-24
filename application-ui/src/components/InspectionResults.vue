@@ -40,21 +40,22 @@ function getOutcomeStyle(outcome: string) {
         return 'background-image: linear-gradient(180deg, var(--good-100) 0%, var(--good-200) 100%)';
     } else if (outcome === 'failure') {
         return 'background-image: linear-gradient(180deg, var(--no-good-100) 0%, var(--no-good-200) 100%)';
+    } else {
+        return 'background-color: var(--bg-300)';
     }
 }
 </script>
 
 <style>
 .inspection-results {
-    display: flex;
-    flex-direction: row;
-    gap: 20px;
     width: 100%;
     height: min-content;
     min-height: 25em;
-    justify-content: space-evenly;
-    align-items: center;
     font-size: 1.4em;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+    align-items: center;
+    justify-items: center;
 }
 .status .outcome {
     height: 100%;

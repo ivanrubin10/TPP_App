@@ -19,8 +19,9 @@ defineProps({
 
 <style scoped>
 .inspection-card {
-    width: 35%;
-    height: 100%;
+    aspect-ratio: 1/1;
+    width: clamp(100px, 31vw, 575px);
+    margin: 20px;
     background-color: var(--bg-200);
     border: var(--text-200) 2px solid;
     padding: 20px;
