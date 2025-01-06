@@ -16,23 +16,63 @@
         />
       </div>
 
-      <!-- Campo para el host del PLC -->
-      <div class="plc-input">
-        <label for="plc-host">PLC Host:</label>
-        <input v-model="plcHost" type="text" id="plc-host" class="plc-host" />
+      <!-- Selector de tipo de conexión -->
+      <div class="connection-type">
+        <label>Tipo de Conexión:</label>
+        <div class="toggle-buttons">
+          <button 
+            :class="['toggle-btn', connectionType === 'PLC' ? 'active' : '']"
+            @click="connectionType = 'PLC'"
+          >
+            PLC
+          </button>
+          <button
+            :class="['toggle-btn', connectionType === 'GALC' ? 'active' : '']"
+            @click="connectionType = 'GALC'"
+          >
+            GALC
+          </button>
+        </div>
       </div>
 
-      <!-- Campo para el puerto del PLC -->
-      <div class="plc-input">
-        <label for="plc-port">PLC Port:</label>
-        <input
-          v-model.number="plcPort"
-          type="number"
-          id="plc-port"
-          class="plc-port"
-          min="1"
-          max="65535"
-        />
+      <!-- Campos para PLC -->
+      <div v-if="connectionType === 'PLC'">
+        <div class="plc-input">
+          <label for="plc-host">PLC Host:</label>
+          <input v-model="plcHost" type="text" id="plc-host" class="plc-host" />
+        </div>
+
+        <div class="plc-input">
+          <label for="plc-port">PLC Port:</label>
+          <input
+            v-model.number="plcPort"
+            type="number"
+            id="plc-port"
+            class="plc-port"
+            min="1"
+            max="65535"
+          />
+        </div>
+      </div>
+
+      <!-- Campos para GALC -->
+      <div v-if="connectionType === 'GALC'">
+        <div class="plc-input">
+          <label for="galc-host">GALC Host:</label>
+          <input v-model="galcHost" type="text" id="galc-host" class="plc-host" />
+        </div>
+
+        <div class="plc-input">
+          <label for="galc-port">GALC Port:</label>
+          <input
+            v-model.number="galcPort"
+            type="number"
+            id="galc-port"
+            class="plc-port"
+            min="1"
+            max="65535"
+          />
+        </div>
       </div>
 
       <button @click="handleSave" class="save-button">Guardar</button>
@@ -48,15 +88,21 @@ const { getConfig, saveConfig } = useBackendApi()
 
 // Variables reactivas para la configuración
 const umbral = ref('')
+const connectionType = ref('PLC')
 const plcHost = ref('')
 const plcPort = ref(0)
+const galcHost = ref('')
+const galcPort = ref(0)
 
 // Obtener configuración inicial al montar el componente
 onMounted(() => {
   getConfig().then((config) => {
     umbral.value = config.min_conf_threshold
+    connectionType.value = config.connection_type
     plcHost.value = config.plc_host
     plcPort.value = config.plc_port
+    galcHost.value = config.galc_host
+    galcPort.value = config.galc_port
   })
 })
 
@@ -65,8 +111,11 @@ const handleSave = async () => {
   try {
     await saveConfig({
       min_conf_threshold: umbral.value,
+      connection_type: connectionType.value,
       plc_host: plcHost.value,
-      plc_port: plcPort.value
+      plc_port: plcPort.value,
+      galc_host: galcHost.value,
+      galc_port: galcPort.value
     })
     alert('Configuración guardada exitosamente!')
   } catch (error) {
@@ -100,6 +149,31 @@ const handleSave = async () => {
 .umbral-input {
   margin-bottom: 20px;
   margin-top: 20px;
+}
+
+.connection-type {
+  margin-bottom: 20px;
+}
+
+.toggle-buttons {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin-top: 10px;
+}
+
+.toggle-btn {
+  padding: 8px 20px;
+  border: 2px solid var(--text-200);
+  border-radius: 4px;
+  background: var(--bg-200);
+  color: white;
+  cursor: pointer;
+}
+
+.toggle-btn.active {
+  background: var(--text-200);
+  color: var(--bg-300);
 }
 
 label {

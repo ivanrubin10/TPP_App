@@ -1,5 +1,9 @@
 <template>
   <div class="content">
+    <div class="connection-status">
+      <div class="status-circle" :class="{ 'connected': isConnected }"></div>
+      <span>{{ isConnected ? `${connectionType} Conectado` : `${connectionType} Desconectado` }}</span>
+    </div>
     <div class="container" v-if="selectedItem">
       <div class="inspection-header">
         <p>{{ selectedItem.id }}</p>
@@ -45,18 +49,8 @@ type Item = {
 }
 
 const items = ref<Item[]>([]);
-/* const items = ref([
-  { id: "058571", expectedPart: "Capo tipo 1", actualPart: "", outcome: "", image: "", resultImage: "", date: "2021-03-17 11:39:35" },
-  { id: "058482", expectedPart: "Capo tipo 2", actualPart: "", outcome: "", image: "", resultImage: "", date: "2021-03-17 11:41:00" },
-  { id: "058673", expectedPart: "Capo tipo 3", actualPart: "", outcome: "", image: "", resultImage: "", date: "2021-03-17 11:41:01" },
-  { id: "058654", expectedPart: "Capo tipo 2", actualPart: "", outcome: "", image: "", resultImage: "", date: "2021-03-17 11:41:02" },
-  { id: "058672", expectedPart: "Capo tipo 1", actualPart: "", outcome: "", image: "", resultImage: "", date: "2021-03-17 11:41:03" },
-  { id: "058651", expectedPart: "Capo tipo 3", actualPart: "", outcome: "", image: "", resultImage: "", date: "2021-03-17 11:41:04" },
-  { id: "058652", expectedPart: "Capo tipo 3", actualPart: "", outcome: "", image: "", resultImage: "", date: "2021-03-17 11:41:05" },
-  { id: "058653", expectedPart: "Capo tipo 2", actualPart: "", outcome: "", image: "", resultImage: "", date: "2021-03-17 11:41:06" },
-  { id: "058654", expectedPart: "Capo tipo 2", actualPart: "", outcome: "", image: "", resultImage: "", date: "2021-03-17 11:41:07" },
-  { id: "058655", expectedPart: "Capo tipo 1", actualPart: "", outcome: "", image: "", resultImage: "", date: "2021-03-17 11:41:08" },
-]); */
+const isConnected = ref(false);
+const connectionType = ref('PLC');
 
 const fetchedItems = ref();
 const selectedItem = ref();
@@ -71,9 +65,38 @@ const { captureImage,
 onMounted(async () => {
   const socket = io('http://localhost:5000'); // Connect to Flask WebSocket server
 
+  socket.on('plc_connect', () => {
+    isConnected.value = true;
+    connectionType.value = 'PLC';
+  });
+
+  socket.on('plc_disconnect', () => {
+    isConnected.value = false;
+    connectionType.value = 'PLC';
+  });
+
+  socket.on('galc_connect', () => {
+    isConnected.value = true;
+    connectionType.value = 'GALC';
+  });
+
+  socket.on('galc_disconnect', () => {
+    isConnected.value = false;
+    connectionType.value = 'GALC';
+  });
+
   socket.on('plc_message', async (data: any) => {
-    console.log('Received message from PLC:', data.message);
-    // Handle the received message in your frontend as needed
+    console.log(`Received message from PLC:`, data.message);
+    await handleMessage(data, 'plc');
+  });
+
+  socket.on('galc_message', async (data: any) => {
+    console.log(`Received message from GALC:`, data.message);
+    await handleMessage(data, 'galc');
+  });
+
+  async function handleMessage(data: any, type: 'plc' | 'galc') {
+    console.log(`Received message from ${type.toUpperCase()}:`, data.message);
     const currentDate = new Date();
     const formattedDate = `${String(currentDate.getDate()).padStart(2, '0')}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${currentDate.getFullYear()} ${String(currentDate.getHours()).padStart(2, '0')}:${String(currentDate.getMinutes()).padStart(2, '0')}:${String(currentDate.getSeconds()).padStart(2, '0')}`;
     
@@ -94,7 +117,7 @@ onMounted(async () => {
     }
 
     const newItem = {
-      car_id: Math.random().toString(36).substr(2, 6), // Generate random ID
+      car_id: Math.random().toString(36).slice(2, 8),
       date: formattedDate,
       expected_part: expectedPart,
       actual_part: '',
@@ -103,10 +126,8 @@ onMounted(async () => {
       outcome: ''
     };
 
-    // Add to database
     await addLog(newItem);
 
-    // Add to local items array
     items.value.push({
       id: newItem.car_id,
       expectedPart: newItem.expected_part,
@@ -116,11 +137,18 @@ onMounted(async () => {
       resultImage: newItem.result_image_path,
       date: newItem.date
     });
-
+    
     selectedItem.value = items.value[items.value.length - 1];
-    handleClick();
-  });
+    await handleClick();
 
+    if (type === 'plc') {
+      const response_message = expectedPart === selectedItem.value.actualPart ? 'GOOD' : 'NOGOOD';
+      socket.emit('plc_response', { message: response_message });
+    } else if (type === 'galc') {
+      const response_message = expectedPart === selectedItem.value.actualPart ? 'GOOD' : 'NOGOOD';
+      socket.emit('galc_response', { message: response_message });
+    }
+  }
 
   await fetchLogs().then((response) => {
     console.log(response);
@@ -232,7 +260,30 @@ function noEsDefecto(item: any) {
 .content {
   height: 100%;
   display: grid;
-  grid-template-rows: 1fr auto;
+  grid-template-rows: auto 1fr auto;
+}
+
+.connection-status {
+  display: flex;
+  align-items: center;
+  height: min-content;
+  background-color: var(--bg-300);
+  padding: 10px 70px;
+  color: var(--text-100);
+  z-index: 1000;
+}
+
+.status-circle {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  margin-right: 10px;
+  background-color: var(--no-good-100);
+  transition: background-color 0.3s ease;
+}
+
+.status-circle.connected {
+  background-color: var(--good-100);
 }
 
 .container {
@@ -240,7 +291,7 @@ function noEsDefecto(item: any) {
   /* Enable vertical scrolling */
   background-color: var(--bg-100);
   padding: 0 15em;
-  padding-top: 50px;
+  padding-top: 20px;
   color: #f5f5f5;
   font-family: sans-serif;
   gap: 10px;

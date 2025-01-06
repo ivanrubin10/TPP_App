@@ -8,6 +8,7 @@ from tflite_detector import tflite_detect_image
 from flask_sqlalchemy import SQLAlchemy
 from flask_marshmallow import Marshmallow
 from marshmallow_sqlalchemy import SQLAlchemySchema, auto_field
+from dataclasses import dataclass
 
 
 app = Flask(__name__, static_folder='../application-ui', static_url_path='/')
@@ -55,32 +56,43 @@ car_logs_schema = CarLogSchema(many=True)
 with app.app_context():
     db.create_all()
 
+@dataclass
+class LastSentMessage:
+    terminal: bytes = None
+    sender: bytes = None
+    serial: bytes = None
+
+last_sent_msg = LastSentMessage()
+
 config = {
     "min_conf_threshold": 0.7,
+    "connection_type": "PLC", # Can be "PLC" or "GALC"
     "plc_host": "127.0.0.1",  # Default IP as a string
-    "plc_port": 12345         # Default port as a number
+    "plc_port": 12345,        # Default port as a number
+    "galc_host": "127.0.0.1", # Default GALC IP
+    "galc_port": 54321        # Default GALC port
 }
 
 @socketio.on('connect')
 def handle_connect():
     print('Client connected')
+    # Start connection based on config type
+    if config['connection_type'] == "PLC":
+        start_client(config['plc_host'], config['plc_port'])
+    else:
+        start_client(config['galc_host'], config['galc_port'])
 
 @socketio.on('disconnect')
 def handle_disconnect():
     print('Client disconnected')
 
-
-def start_client():
-    host = '127.0.0.1'  # IP address of the PLC
-    port = 12345             # Port number
-
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
-        client_socket.connect((host, port))
 client_thread = None
 client_socket = None
 
+first_message = True  # Initialize first_message as a global variable
+
 def start_client(host, port):
-    global client_socket, client_thread
+    global client_socket, client_thread  # Declare client_socket and client_thread as global
 
     # Close any existing client socket
     if client_socket:
@@ -90,12 +102,13 @@ def start_client(host, port):
             print(f"Error closing previous socket: {e}")
 
     def client_logic():
-        global client_socket
+        global client_socket, first_message  # Include first_message in global declaration
         try:
             # Create and connect a new client socket
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client_socket.connect((host, port))
-            print(f"Connected to PLC at {host}:{port}")
+            print(f"Connected to {config['connection_type']} at {host}:{port}")
+            socketio.emit(f'{config["connection_type"].lower()}_connect')
             
             # Keep the connection alive
             while True:
@@ -103,35 +116,124 @@ def start_client(host, port):
                 if not data:
                     break
 
-                message = data.decode()
-                print(f"Received message: {message}")
+                if config['connection_type'] == "GALC":
+                    # Extract fields from 45 byte GALC message
+                    line = data[26:27].decode()  # Byte 27
+                    tracking_point = data[27:29].decode()  # Bytes 28-29
+                    bc_sequence = data[29:32].decode()  # Bytes 30-32
+                    last_byte = data[44:45]  # Last byte (random 1,5,8)
+                    
+                    print(f"Line: {line}")
+                    print(f"Tracking Point: {tracking_point}")
+                    print(f"BC Sequence: {bc_sequence}")
+                    print(f"Last byte value: {int.from_bytes(last_byte, 'big')}")
 
-                # Call handle_plc_message to emit the event
-                handle_plc_message(message)
+                    # Construct 26 byte response
+                    response = bytearray(26)
+                    # Set terminal name from GALC message sender name (bytes 7-12)
+                    response[0:6] = data[6:12]
+                    # Set sender name from GALC message terminal name (bytes 1-6)
+                    response[6:12] = data[0:6]
+                    # Set serial number (bytes 13-16)
+                    response[12:16] = data[12:16]
+                    # Set bytes 17-25 to 0
+                    response[16:25] = bytes([0] * 9)
+                    # Set last byte to 0 if first message, 1 otherwise
+                    response[25] = 0 if first_message else 1
+
+                    if first_message:
+                        # Use last two bytes for message value
+                        last_two_bytes = data[43:45]
+                        last_two_bytes_val = int.from_bytes(last_two_bytes, 'big')
+                        message = f"{last_two_bytes_val:02d}" # Format as 2 digits
+                        print(f"Received message value: {message}")
+                        message_handler.handle_message(message)  # Use message_handler instance
+                        first_message = False
+                    
+                    client_socket.sendall(response)
+                else:
+                    message = data.decode()
+                    print(f"Received message: {message}")
+                    message_handler.handle_message(message)  # Use message_handler instance
 
         except Exception as e:
             print(f"Client error: {e}")
+            socketio.emit(f'{config["connection_type"].lower()}_disconnect')
+            
 
     # Start the client in a new thread
     client_thread = threading.Thread(target=client_logic, daemon=True)
     client_thread.start()
 
-def handle_plc_message(message):
-    print("Message received from PLC:", message)
-    # Emit a WebSocket event to notify the frontend
-    socketio.emit('plc_message', {'message': message})
+class MessageHandler:
+    def __init__(self):
+        self.message_received = False
+        self.lock = threading.Lock()  # Add thread lock
+
+    def handle_message(self, message):
+        with self.lock:  # Use lock to ensure thread safety
+            if not self.message_received:
+                print(f"Message received from {config['connection_type']}:", message)
+                # Emit a WebSocket event to notify the frontend
+                socketio.emit(f'{config["connection_type"].lower()}_message', {'message': message})
+                self.message_received = True
+
+# Create an instance of the MessageHandler class
+message_handler = MessageHandler()
+
+# Remove redundant handlers since we're using the message_handler instance directly
+@socketio.on('plc_message')
+@socketio.on('galc_message')
+def handle_message(message):
+    pass  # No longer needed since we use message_handler directly
+
+@socketio.on('plc_response')
+@socketio.on('galc_response')
+def handle_response(message):
+    print(f"{config['connection_type']} response emitted: {message.get('message')}")
+    
+    if config['connection_type'] == "PLC":
+        # Create bytes directly for OK ("OK") and NG ("NG")
+        msg_OK = bytes([0b01001111, 0b01001011])  # "OK" in ASCII
+        msg_NG = bytes([0b01001110, 0b01000111])  # "NG" in ASCII
+        
+        if message.get('message') == "GOOD":
+            try:
+                client_socket.sendall(msg_OK)
+            except Exception as e:
+                print(f"Error sending response to PLC: {e}")
+        elif message.get('message') == "NOGOOD":
+            try:
+                client_socket.sendall(msg_NG)
+            except Exception as e:
+                print(f"Error sending response to PLC: {e}")
+                
+    else:  # GALC response
+        response = bytearray(45)  # Create 45 byte message
+        
+        # Ensure last_sent_msg has valid data before copying
+        if last_sent_msg.terminal and last_sent_msg.sender and last_sent_msg.serial:
+            response[0:6] = last_sent_msg.terminal
+            response[6:12] = last_sent_msg.sender
+            response[12:16] = last_sent_msg.serial
+        else:
+            print("Warning: last_sent_msg does not contain valid data.")
+            response[0:16] = bytes([0] * 16)  # Fill with zeros if data is invalid
+        
+        # Set bytes 17-25 to 0
+        response[16:25] = bytes([0] * 9)
+        
+        # Set response status based on first_message variable
+        response[25] = 0 if first_message else 1  # 0 if first_message is true, 1 otherwise
+            
+        try:
+            client_socket.sendall(response)
+        except Exception as e:
+            print(f"Error sending response to GALC: {e}")
 
 @app.route('/status', methods=['GET'])
 def get_status():
-    return jsonify({'status': 'connected to PLC'}), 200
-
-@app.after_request
-def start_background_task(response):
-    global config
-    if not hasattr(app, 'background_thread_started'):
-        app.background_thread_started = True
-        socketio.start_background_task(start_client(config['plc_host'], config['plc_port']))  # Use this instead of threading
-    return response
+    return jsonify({'status': f'connected to {config["connection_type"]}'}), 200
 
 @app.route('/')
 def serve_frontend():
@@ -241,17 +343,6 @@ def get_logs():
     result = car_logs_schema.dump(all_logs)
     return jsonify(result)
 
-#   const saveConfig = async (config) => {
-#     try {
-#       const response = await axios.post(`${baseUrl}/config`, config)
-#       return response.data
-#     } catch (error) {
-#       console.error('Error saving config:', error)
-#       throw error
-#     }
-#   }
-# this is how its called from the front end
-
 @app.route('/config', methods=['GET', 'POST'])
 def handle_config():
     if request.method == 'GET':
@@ -263,6 +354,8 @@ def handle_config():
         data = request.json
         if 'min_conf_threshold' in data:
             config['min_conf_threshold'] = float(data['min_conf_threshold'])
+        if 'connection_type' in data:
+            config['connection_type'] = str(data['connection_type'])
         if 'plc_host' in data:
             config['plc_host'] = str(data['plc_host'])
         if 'plc_port' in data:
@@ -270,9 +363,19 @@ def handle_config():
                 config['plc_port'] = int(data['plc_port'])
             except ValueError:
                 return jsonify({"error": "plc_port must be an integer"}), 400
+        if 'galc_host' in data:
+            config['galc_host'] = str(data['galc_host'])
+        if 'galc_port' in data:
+            try:
+                config['galc_port'] = int(data['galc_port'])
+            except ValueError:
+                return jsonify({"error": "galc_port must be an integer"}), 400
 
         # Restart the client with the updated configuration
-        start_client(config['plc_host'], config['plc_port'])    
+        if config['connection_type'] == "PLC":
+            start_client(config['plc_host'], config['plc_port'])
+        else:
+            start_client(config['galc_host'], config['galc_port'])
         
         return jsonify({"message": "Configuration updated successfully"}), 200
 

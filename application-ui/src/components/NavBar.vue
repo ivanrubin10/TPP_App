@@ -64,7 +64,7 @@ function toggleSideMenu() {
   width: fit-content;
   text-wrap: nowrap;
   color: var(--text-100);
-  font-size: clamp(0.7em, 2vw, 2em);
+  font-size: clamp(0.7em, 1.3vw, 2em);
   margin-right: 50px;
 }
 
@@ -80,7 +80,7 @@ li {
   background-color: var(--bg-100);
   padding: 20px;
   text-decoration: none;
-  font-size: clamp(0.7em, 2vw, 1em);
+  font-size: clamp(0.7em, 1.2vw, 1em);
 }
 
 .active {
