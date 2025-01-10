@@ -1,3 +1,4 @@
+import time
 from flask import Flask, jsonify, request, send_from_directory
 import socket
 import threading
@@ -66,170 +67,168 @@ last_sent_msg = LastSentMessage()
 
 config = {
     "min_conf_threshold": 0.7,
-    "connection_type": "PLC", # Can be "PLC" or "GALC"
+    "connection_type": "PLC",  # Can be "PLC" or "GALC"
     "plc_host": "127.0.0.1",  # Default IP as a string
     "plc_port": 12345,        # Default port as a number
     "galc_host": "127.0.0.1", # Default GALC IP
     "galc_port": 54321        # Default GALC port
 }
 
+client_socket = None
+client_thread = None
+
+is_connected = False
+client_socket = None
+galc_connection = None
+plc_connection = None
+
+message_processing = False
+# Added GALC response handling and connection logic
+def handle_galc_response(conn):
+    global message_processing, is_connected, galc_connection
+    message_processing = False
+    while True:
+        socketio.emit('connection_status', {'status': True if is_connected else False})
+        socketio.emit('connection_type', {'type': config['connection_type']})
+        try:
+            # Receive the 45-byte GALC message
+            data = conn.recv(45)
+            if len(data) != 45:
+                print(f"Invalid GALC message length: {len(data)}. Closing connection.")
+                break
+
+            print(f"Received GALC message: Receiver: {data[0:6].decode()}, "
+                  f"Sender: {data[6:12].decode()}, Serial: {data[12:16].decode()}, "
+                  f"Trigger: {data[44]:02d}")
+
+            # Extract and handle the last two bytes
+            last_two_bytes = data[43:45]
+            trigger_value = int.from_bytes(last_two_bytes, "big")  # Convert to integer
+            trigger_str = f"{trigger_value:02d}"  # Ensure it is a 2-digit string
+
+
+            if trigger_str in ["01", "05", "08"] and message_processing == False:
+                print(f"Triggering Vue.js handler with value: {trigger_str}")
+                socketio.emit('handle_message', {'message': trigger_str})  # Notify Vue.js frontend with defined message
+
+            # Send a 26-byte response
+            response = bytearray(26)
+            response[:6] = data[6:12]  # Sender to receiver
+            response[6:12] = data[0:6]  # Receiver to sender
+            response[12:16] = data[12:16]  # Serial number
+            response[25] = 1 if message_processing else 0  # Stop or keep-alive flag
+            conn.sendall(response)
+            print(f"Sent GALC response: Receiver: {response[0:6].decode()}, "
+                  f"Sender: {response[6:12].decode()}, Serial: {response[12:16].decode()}, "
+                  f"Status: {response[25]}")
+            
+            message_processing = True
+
+        except Exception as e:
+            print(f"Error handling GALC message: {e}")
+            break
+    conn.close()
+    is_connected = False  # Update connection status
+    galc_connection = None  # Reset GALC connection
+
+def connect_to_galc():
+    global client_socket, is_connected, galc_connection
+
+    if galc_connection is not None:
+        print("Already connected to GALC. Ignoring new connection attempt.")
+        return
+    host = config["galc_host"]
+    port = config["galc_port"]
+
+    try:
+        conn = socket.create_connection((host, port))
+        client_socket = conn
+        galc_connection = conn
+        is_connected = True  # Update connection status
+        threading.Thread(target=handle_galc_response, args=(conn,), daemon=True).start()
+    except Exception as e:
+        print(f"GALC connection error: {e}")
+
+def handle_plc_response(conn):
+    global plc_connection
+    while True:
+        socketio.emit('connection_status', {'status': True if is_connected else False})
+        socketio.emit('connection_type', {'type': config['connection_type']})
+        try:
+            # Receive data from the PLC
+            data = conn.recv(1024)
+            if not data:
+                print("No data received from PLC, closing connection.")
+                break
+
+            print(f"Received PLC data: {data.decode(errors='replace')}")
+
+            # Process PLC data and emit events as necessary
+            message = data.decode()  # Example decoding
+            socketio.emit('plc_message', {'message': message})  # Notify frontend
+            time.wait(1)
+            # Send a response back to the PLC
+            response = b"OK" if "GOOD" in message else b"NG"
+            conn.sendall(response)
+            print(f"Sent PLC response: {response.decode()}")
+        except Exception as e:
+            print(f"Error handling PLC message: {e}")
+            break
+    conn.close()
+    plc_connection = None  # Reset PLC connection
+
+def connect_to_plc():
+    global client_socket, is_connected, plc_connection
+
+    if plc_connection is not None:
+        print("Already connected to PLC. Ignoring new connection attempt.")
+        return
+    
+
+    host = config["plc_host"]
+    port = config["plc_port"]
+
+    try:
+        conn = socket.create_connection((host, port))
+        client_socket = conn
+        plc_connection = conn
+        is_connected = True  # Update connection status
+        threading.Thread(target=handle_plc_response, args=(conn,), daemon=True).start()
+    except Exception as e:
+        print(f"PLC connection error: {e}")
+
+def retry_connection():
+    print("Retrying connection...")
+    if config['connection_type'] == "GALC":
+        connect_to_galc()
+    else:
+        connect_to_plc()
+# Start the appropriate connection based on connection type
 @socketio.on('connect')
 def handle_connect():
-    print('Client connected')
-    # Start connection based on config type
-    if config['connection_type'] == "PLC":
-        start_client(config['plc_host'], config['plc_port'])
+    global is_connected
+    client_ip = request.remote_addr
+    print(f"Client connected from IP: {client_ip}")
+
+    # Check if already connected
+    if is_connected:
+        print("Already connected. Ignoring new connection attempt.")
+        return
+
+    is_connected = True  # Update connection status
+    socketio.emit('connection_type', {'type': config['connection_type']})  # Send connection type on connect
+    if config['connection_type'] == "GALC":
+        connect_to_galc()
     else:
-        start_client(config['galc_host'], config['galc_port'])
+        connect_to_plc()
 
 @socketio.on('disconnect')
 def handle_disconnect():
+    global is_connected
+    is_connected = False  # Update connection status
+    socketio.emit('connection_status', {'status': False})
+    socketio.emit('connection_type', {'type': config['connection_type']})
     print('Client disconnected')
-
-client_thread = None
-client_socket = None
-
-first_message = True  # Initialize first_message as a global variable
-
-def start_client(host, port):
-    global client_socket, client_thread  # Declare client_socket and client_thread as global
-
-    # Close any existing client socket
-    if client_socket:
-        try:
-            client_socket.close()
-        except Exception as e:
-            print(f"Error closing previous socket: {e}")
-
-    def client_logic():
-        global client_socket, first_message  # Include first_message in global declaration
-        try:
-            # Create and connect a new client socket
-            client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            client_socket.connect((host, port))
-            print(f"Connected to {config['connection_type']} at {host}:{port}")
-            socketio.emit(f'{config["connection_type"].lower()}_connect')
-            
-            # Keep the connection alive
-            while True:
-                data = client_socket.recv(1024)
-                if not data:
-                    break
-
-                if config['connection_type'] == "GALC":
-                    # Extract fields from 45 byte GALC message
-                    line = data[26:27].decode()  # Byte 27
-                    tracking_point = data[27:29].decode()  # Bytes 28-29
-                    bc_sequence = data[29:32].decode()  # Bytes 30-32
-                    last_byte = data[44:45]  # Last byte (random 1,5,8)
-                    
-                    print(f"Line: {line}")
-                    print(f"Tracking Point: {tracking_point}")
-                    print(f"BC Sequence: {bc_sequence}")
-                    print(f"Last byte value: {int.from_bytes(last_byte, 'big')}")
-
-                    # Construct 26 byte response
-                    response = bytearray(26)
-                    # Set terminal name from GALC message sender name (bytes 7-12)
-                    response[0:6] = data[6:12]
-                    # Set sender name from GALC message terminal name (bytes 1-6)
-                    response[6:12] = data[0:6]
-                    # Set serial number (bytes 13-16)
-                    response[12:16] = data[12:16]
-                    # Set bytes 17-25 to 0
-                    response[16:25] = bytes([0] * 9)
-                    # Set last byte to 0 if first message, 1 otherwise
-                    response[25] = 0 if first_message else 1
-
-                    if first_message:
-                        # Use last two bytes for message value
-                        last_two_bytes = data[43:45]
-                        last_two_bytes_val = int.from_bytes(last_two_bytes, 'big')
-                        message = f"{last_two_bytes_val:02d}" # Format as 2 digits
-                        print(f"Received message value: {message}")
-                        message_handler.handle_message(message)  # Use message_handler instance
-                        first_message = False
-                    
-                    client_socket.sendall(response)
-                else:
-                    message = data.decode()
-                    print(f"Received message: {message}")
-                    message_handler.handle_message(message)  # Use message_handler instance
-
-        except Exception as e:
-            print(f"Client error: {e}")
-            socketio.emit(f'{config["connection_type"].lower()}_disconnect')
-            
-
-    # Start the client in a new thread
-    client_thread = threading.Thread(target=client_logic, daemon=True)
-    client_thread.start()
-
-class MessageHandler:
-    def __init__(self):
-        self.message_received = False
-        self.lock = threading.Lock()  # Add thread lock
-
-    def handle_message(self, message):
-        with self.lock:  # Use lock to ensure thread safety
-            if not self.message_received:
-                print(f"Message received from {config['connection_type']}:", message)
-                # Emit a WebSocket event to notify the frontend
-                socketio.emit(f'{config["connection_type"].lower()}_message', {'message': message})
-                self.message_received = True
-
-# Create an instance of the MessageHandler class
-message_handler = MessageHandler()
-
-# Remove redundant handlers since we're using the message_handler instance directly
-@socketio.on('plc_message')
-@socketio.on('galc_message')
-def handle_message(message):
-    pass  # No longer needed since we use message_handler directly
-
-@socketio.on('plc_response')
-@socketio.on('galc_response')
-def handle_response(message):
-    print(f"{config['connection_type']} response emitted: {message.get('message')}")
-    
-    if config['connection_type'] == "PLC":
-        # Create bytes directly for OK ("OK") and NG ("NG")
-        msg_OK = bytes([0b01001111, 0b01001011])  # "OK" in ASCII
-        msg_NG = bytes([0b01001110, 0b01000111])  # "NG" in ASCII
-        
-        if message.get('message') == "GOOD":
-            try:
-                client_socket.sendall(msg_OK)
-            except Exception as e:
-                print(f"Error sending response to PLC: {e}")
-        elif message.get('message') == "NOGOOD":
-            try:
-                client_socket.sendall(msg_NG)
-            except Exception as e:
-                print(f"Error sending response to PLC: {e}")
-                
-    else:  # GALC response
-        response = bytearray(45)  # Create 45 byte message
-        
-        # Ensure last_sent_msg has valid data before copying
-        if last_sent_msg.terminal and last_sent_msg.sender and last_sent_msg.serial:
-            response[0:6] = last_sent_msg.terminal
-            response[6:12] = last_sent_msg.sender
-            response[12:16] = last_sent_msg.serial
-        else:
-            print("Warning: last_sent_msg does not contain valid data.")
-            response[0:16] = bytes([0] * 16)  # Fill with zeros if data is invalid
-        
-        # Set bytes 17-25 to 0
-        response[16:25] = bytes([0] * 9)
-        
-        # Set response status based on first_message variable
-        response[25] = 0 if first_message else 1  # 0 if first_message is true, 1 otherwise
-            
-        try:
-            client_socket.sendall(response)
-        except Exception as e:
-            print(f"Error sending response to GALC: {e}")
 
 @app.route('/status', methods=['GET'])
 def get_status():
@@ -239,9 +238,16 @@ def get_status():
 def serve_frontend():
     return send_from_directory(app.static_folder, 'index.html')
 
+@app.route('/retry-connection', methods=['POST'])
+def handle_retry_connection():
+    retry_connection()
+    return jsonify({'message': 'Retrying connection...'}), 200
+
 @app.route('/capture-image', methods=['GET'])
 def capture_and_detect():
-  global config
+  global config, capturing
+  
+  capturing = True
   try:
     print("Capturing image...")
     image = capture_image()
@@ -277,7 +283,7 @@ def check_car(car_id):
 def update_item():
     try:
         data = request.get_json()
-        car_log = CarLog.query.get(data['id'])
+        car_log = db.session.get(CarLog, data['id'])
         if car_log:
             car_log.car_id = data['car_id']
             car_log.date = data['date']
@@ -371,11 +377,6 @@ def handle_config():
             except ValueError:
                 return jsonify({"error": "galc_port must be an integer"}), 400
 
-        # Restart the client with the updated configuration
-        if config['connection_type'] == "PLC":
-            start_client(config['plc_host'], config['plc_port'])
-        else:
-            start_client(config['galc_host'], config['galc_port'])
         
         return jsonify({"message": "Configuration updated successfully"}), 200
 

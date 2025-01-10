@@ -87,6 +87,16 @@ export function useBackendApi() {
     }
   }
 
+  const retryConnection = async () => {
+    try {
+      const response = await axios.post(`${baseUrl}/retry-connection`)
+      return response.data
+    } catch (error) {
+      console.error('Error retrying connection:', error)
+      throw error
+    }
+  }
+
   return {
     captureImage,
     capturedImage,
@@ -99,5 +109,6 @@ export function useBackendApi() {
     addLog,
     getConfig,
     saveConfig,
+    retryConnection,
   }
 }

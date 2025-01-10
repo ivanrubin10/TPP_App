@@ -1,6 +1,6 @@
 <template>
   <div class="content">
-    <div class="connection-status">
+    <div class="connection-status" @click="retryConnection">
       <div class="status-circle" :class="{ 'connected': isConnected }"></div>
       <span>{{ isConnected ? `${connectionType} Conectado` : `${connectionType} Desconectado` }}</span>
     </div>
@@ -34,8 +34,8 @@ import { useBackendApi } from '../composables/useBackendApi'
 import CarsFooter from '../components/CarsFooter.vue'
 import FalseOutcomeButton from '../components/FalseOutcomeButton.vue'
 import InspectionResults from '../components/InspectionResults.vue'
-import { onMounted, ref } from 'vue';
-import io from 'socket.io-client';
+import { onBeforeUnmount, onMounted, ref } from 'vue';
+import socket from '../composables/socket';
 
 
 type Item = {
@@ -51,6 +51,7 @@ type Item = {
 const items = ref<Item[]>([]);
 const isConnected = ref(false);
 const connectionType = ref('PLC');
+const messageBeingHandled = ref(false);
 
 const fetchedItems = ref();
 const selectedItem = ref();
@@ -60,93 +61,107 @@ const { captureImage,
   fetchLogs,
   checkCarExists,
   updateItem,
-  addLog } = useBackendApi()
+  addLog,
+  retryConnection,
+ } = useBackendApi()
 
 onMounted(async () => {
-  const socket = io('http://localhost:5000'); // Connect to Flask WebSocket server
+  socket.on('connection_status', (data: any) => {
+    isConnected.value = data.status;
+  }
+  );
 
-  socket.on('plc_connect', () => {
-    isConnected.value = true;
-    connectionType.value = 'PLC';
+  socket.on('connection_type', (data: any) => {
+    connectionType.value = data.type;
   });
-
-  socket.on('plc_disconnect', () => {
-    isConnected.value = false;
-    connectionType.value = 'PLC';
-  });
-
-  socket.on('galc_connect', () => {
-    isConnected.value = true;
-    connectionType.value = 'GALC';
-  });
-
-  socket.on('galc_disconnect', () => {
-    isConnected.value = false;
-    connectionType.value = 'GALC';
-  });
-
+  
   socket.on('plc_message', async (data: any) => {
     console.log(`Received message from PLC:`, data.message);
     await handleMessage(data, 'plc');
   });
 
-  socket.on('galc_message', async (data: any) => {
-    console.log(`Received message from GALC:`, data.message);
-    await handleMessage(data, 'galc');
+
+  socket.on('handle_message', async (data: any) => {
+    if (messageBeingHandled.value) {
+      console.warn('Message handling is already in progress. Ignoring this message.');
+      return;
+    }
+    
+    messageBeingHandled.value = true;
+    try {
+      console.log(`Received message from GALC:`, data.message);
+      await handleMessage(data, 'galc').then(() => {
+        messageBeingHandled.value = false;
+      });
+    } catch (error) {
+      console.error('Error handling message:', error);
+    } finally {
+      messageBeingHandled.value = false; // Reset the flag after processing
+    }
   });
 
+  let isProcessing = false;
+
   async function handleMessage(data: any, type: 'plc' | 'galc') {
-    console.log(`Received message from ${type.toUpperCase()}:`, data.message);
-    const currentDate = new Date();
-    const formattedDate = `${String(currentDate.getDate()).padStart(2, '0')}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${currentDate.getFullYear()} ${String(currentDate.getHours()).padStart(2, '0')}:${String(currentDate.getMinutes()).padStart(2, '0')}:${String(currentDate.getSeconds()).padStart(2, '0')}`;
-    
-    let expectedPart = '';
-    switch(data.message) {
-      case '01':
-        expectedPart = 'Capo tipo 1';
-        break;
-      case '05':
-        expectedPart = 'Capo tipo 2'; 
-        break;
-      case '08':
-        expectedPart = 'Capo tipo 3';
-        break;
-      default:
-        console.warn('Unknown message type:', data.message);
-        return;
+    if (isProcessing) {
+      console.warn('Message handling is already in progress. Ignoring this message.');
+      return;
     }
-
-    const newItem = {
-      car_id: Math.random().toString(36).slice(2, 8),
-      date: formattedDate,
-      expected_part: expectedPart,
-      actual_part: '',
-      original_image_path: '',
-      result_image_path: '',
-      outcome: ''
-    };
-
-    await addLog(newItem);
-
-    items.value.push({
-      id: newItem.car_id,
-      expectedPart: newItem.expected_part,
-      actualPart: newItem.actual_part,
-      outcome: newItem.outcome,
-      image: newItem.original_image_path,
-      resultImage: newItem.result_image_path,
-      date: newItem.date
-    });
     
-    selectedItem.value = items.value[items.value.length - 1];
-    await handleClick();
+    isProcessing = true;
+    try {
+      const currentDate = new Date();
+      const formattedDate = `${String(currentDate.getDate()).padStart(2, '0')}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${currentDate.getFullYear()} ${String(currentDate.getHours()).padStart(2, '0')}:${String(currentDate.getMinutes()).padStart(2, '0')}:${String(currentDate.getSeconds()).padStart(2, '0')}`;
+      
+      let expectedPart = '';
+      switch(data.message) {
+        case '01':
+          expectedPart = 'Capo tipo 1';
+          break;
+        case '05':
+          expectedPart = 'Capo tipo 2'; 
+          break;
+        case '08':
+          expectedPart = 'Capo tipo 3';
+          break;
+        default:
+          console.warn('Unknown message type:', data.message);
+          return;
+      }
 
-    if (type === 'plc') {
+      const newItem = {
+        car_id: Math.random().toString(36).slice(2, 8),
+        date: formattedDate,
+        expected_part: expectedPart,
+        actual_part: '',
+        original_image_path: '',
+        result_image_path: '',
+        outcome: ''
+      };
+
+      await addLog(newItem);
+
+      items.value.push({
+        id: newItem.car_id,
+        expectedPart: newItem.expected_part,
+        actualPart: newItem.actual_part,
+        outcome: newItem.outcome,
+        image: newItem.original_image_path,
+        resultImage: newItem.result_image_path,
+        date: newItem.date
+      });
+      
+      selectedItem.value = items.value[items.value.length - 1];
+      await handleClick();
+
       const response_message = expectedPart === selectedItem.value.actualPart ? 'GOOD' : 'NOGOOD';
-      socket.emit('plc_response', { message: response_message });
-    } else if (type === 'galc') {
-      const response_message = expectedPart === selectedItem.value.actualPart ? 'GOOD' : 'NOGOOD';
-      socket.emit('galc_response', { message: response_message });
+      if (type === 'plc') {
+        socket.emit('plc_response', { message: response_message });
+      } else if (type === 'galc') {
+        socket.emit('galc_response', { message: response_message });
+      }
+    } finally {
+      isProcessing = false;
     }
   }
 
@@ -180,11 +195,24 @@ onMounted(async () => {
 
 });
 
+onBeforeUnmount(() => {
+  // Clean up the event listeners when the component is unmounted
+  socket.off('connection_status');
+  socket.off('connection_type');
+  socket.off('handle_message');
+});
+
 const handleItemClicked = (item: any) => {
   selectedItem.value = item;
 };
 
+let clickHandle = false;
 const handleClick = async () => {
+  if (clickHandle) {
+    return;
+  }
+
+  clickHandle = true;
   try {
     const data = await captureImage();
     console.log('Captured data:', data);
@@ -245,6 +273,8 @@ const handleClick = async () => {
   } catch (error) {
     console.error('Error capturing data:', error);
   }
+
+  clickHandle = false;
 };
 
 function esDefecto(item: any) {
@@ -253,7 +283,6 @@ function esDefecto(item: any) {
 function noEsDefecto(item: any) {
   console.log("no es defecto", item);
 }
-
 </script>
 
 <style scoped>
@@ -284,6 +313,10 @@ function noEsDefecto(item: any) {
 
 .status-circle.connected {
   background-color: var(--good-100);
+}
+
+.connection-status {
+  cursor: pointer
 }
 
 .container {

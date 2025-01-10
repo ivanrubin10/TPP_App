@@ -3,232 +3,103 @@ import time
 import threading
 import random
 
-def create_galc_message():
-    # Create 45 byte message
+# Global variable to track the active connection
+active_connection = None
+
+def create_galc_message(empty=False):
     message = bytearray(45)
-    
-    # Bytes 1-6: Receiver logical name
-    message[0:6] = 'LSA270'.encode()
-    
-    # Bytes 7-12: Sender logical name  
-    message[6:12] = 'OUTP_P'.encode()
-    
-    # Bytes 13-16: Serial number
-    message[12:16] = '0000'.encode()
-    
-    # Byte 17: Mode
-    message[16] = 1
-    
-    # Bytes 18-22: Data length 
-    message[17:22] = '00019'.encode()
-    
-    # Bytes 23-24: Process type
-    message[22:24] = '00'.encode()
-    
-    # Bytes 25-26: Process result
-    message[24:26] = '  '.encode()
-    
-    # Byte 27: Line
-    message[26] = 1
-    
-    # Bytes 28-29: Tracking point
-    message[27:29] = 'Q0'.encode()
-    
-    # Generate sequence number (incrementing)
-    global sequence_num
+    # Header details (as specified in the original file)
+    message[0:6] = b"LSA270"  # Receiver logical name
+    message[6:12] = b"OUTP_P"  # Sender logical name
+    message[12:16] = b"0000"  # Serial number
+    message[16:22] = b"00019 "  # Mode + Data length
+    message[22:24] = b"00"  # Process type
+    message[24:26] = b"  "  # Process result
+    message[26:27] = b"1"  # Line
+    message[27:29] = b"Q0"  # Tracking point
+
+    # Sequence number handling
     if not hasattr(create_galc_message, 'sequence_num'):
         create_galc_message.sequence_num = 601
     seq = str(create_galc_message.sequence_num).zfill(3)
-    message[29:32] = seq.encode()
     create_galc_message.sequence_num = (create_galc_message.sequence_num + 1) % 1000
-    
-    # Generate random body number (5 chars)
-    body_num = f"{random.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ')}{random.randint(1000,9999)}"
-    message[32:37] = body_num.encode()
-    
-    # Generate random model number (3 digits)
-    model_num = f"{random.randint(0,999):03d}"
-    message[37:40] = model_num.encode()
-    
-    # Bytes 41-43: Other vehicle info
-    message[40:43] = '000'.encode()
-    
-    # Last two bytes: random value from [1,5,8]
-    random_val = random.choice([1,5,8])
-    message[43:45] = bytes([0, random_val])
-    
-    print(f"Created GALC message: {message.decode('ascii', errors='replace')}")
+    message[29:32] = seq.encode()
+
+    if not empty:
+        # Generate random body and status bytes
+        body_num = f"{random.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ')}{random.randint(1000, 9999)}"
+        model_num = f"{random.randint(0, 999):03d}"
+        random_val = random.choice([1, 5, 8])  # Possible triggers for Vue.js
+        message[32:37] = body_num.encode()
+        message[37:40] = model_num.encode()
+        message[40:43] = b"000"  # Placeholder
+        message[43:45] = bytes([0, random_val])
+    else:
+        # Zero out the body if empty
+        message[32:45] = bytes([0] * 13)
+
     return message
 
-def send_periodic_messages(conn, last_response_time, last_response_status):
-    # Initialize thread local values
-    last_response_time.value = time.time()
-    last_response_status.value = '00'
-    
-    # Wait 10 seconds before sending the first message
-    time.sleep(10)
-    
-    while True:
-        try:
-            current_time = time.time()
-            if current_time - last_response_time.value > 60:
-                print("No response from client for 30 seconds, closing connection")
-                try:
-                    conn.close()
-                except:
-                    pass
-                return
-
-            # Only send if we've received a response (status 00 or 01) 
-            if last_response_status.value in ['00', '01']:
-                try:
-                    message = create_galc_message()
-                    # If last response had status 1, send empty data
-                    if last_response_status.value == '01':
-                        # Zero out all data fields but keep header info
-                        message[32:45] = bytes([0] * 13)
-                        print("Sending empty data message")
-                    try:
-                        conn.sendall(message)
-                        print(f"Sent GALC message: {message.decode('ascii', errors='replace')} ({len(message)} bytes)")
-                    except socket.error:
-                        print("Socket error while sending message")
-                        return
-                except Exception as e:
-                    print(f"Error creating/sending message: {str(e)}")
-                    try:
-                        conn.close()
-                    except:
-                        pass
-                    return
-            
-            time.sleep(15)  # Send messages every 15 seconds
-            
-        except Exception as e:
-            print(f"Error in send_periodic_messages: {str(e)}")
-            try:
-                conn.close()
-            except:
-                pass
-            return
 
 def handle_client(conn, addr):
-    print(f"Connected by {addr}")
+    global active_connection
+    if active_connection is not None:
+        print(f"Connection attempt from {addr} rejected. Already connected to {active_connection}.")
+        conn.close()  # Reject the new connection
+        return
     
-    # Use mutable objects to share state between threads
-    last_response_time = threading.local()
-    last_response_time.value = time.time()
-    
-    last_response_status = threading.local() 
-    last_response_status.value = '00'  # Default status
-    
-    # Store last sent message details for verification
-    last_sent_msg = threading.local()
-    last_sent_msg.terminal = None
-    last_sent_msg.sender = None
-    last_sent_msg.serial = None
-    
-    # Start a separate thread to send periodic messages
-    message_thread = threading.Thread(
-        target=send_periodic_messages, 
-        args=(conn, last_response_time, last_response_status),
-        daemon=True
-    )
-    message_thread.start()
-    
-    # Receive and handle messages from the client
+    active_connection = addr  # Set the active connection
+    print(f"New client connected from {addr}")
+    stop_signal_received = False
+
     try:
-        while True:
-            try:
-                data = conn.recv(26)  # Expect 26 byte response
-                if not data:
-                    print("Client disconnected")
-                    break
-                    
-                print(f"Received raw data from client: {data.decode('ascii', errors='replace')}")
-                    
-                # Parse 26 byte response
-                try:
-                    terminal_name = data[0:6]
-                    sender_name = data[6:12] 
-                    serial_number = data[12:16]
-                    # Bytes 17-25 are zeros
-                    response_status = data[25]  # 0 for first message, 1 for subsequent
-                except IndexError:
-                    print(f"Error: Received malformed data of length {len(data)}")
-                    continue
-                    
-                # Verify the response matches the sent message
-                if (last_sent_msg.terminal and last_sent_msg.sender and last_sent_msg.serial):
-                    if (terminal_name.decode() != last_sent_msg.sender.decode() or  # Terminal should match sender from our msg
-                        sender_name.decode() != last_sent_msg.terminal.decode() or  # Sender should match terminal from our msg
-                        serial_number.decode() != last_sent_msg.serial.decode()):   # Serial should match
-                        print("Warning: Response fields don't match sent message!")
-                        print(f"Expected: Terminal={last_sent_msg.sender.decode()}, Sender={last_sent_msg.terminal.decode()}, Serial={last_sent_msg.serial.decode()}")
-                        print(f"Received: Terminal={terminal_name.decode()}, Sender={sender_name.decode()}, Serial={serial_number.decode()}")
-                
-                # Store details of sent message for next verification
-                # Wait for client response before creating a new message
-                # msg = create_galc_message()
-                # last_sent_msg.terminal = msg[0:6]  # Receiver name becomes client's sender
-                # last_sent_msg.sender = msg[6:12]   # Sender name becomes client's terminal
-                # last_sent_msg.serial = msg[12:16]  # Serial number should match
-                
-                print(f"Received from client: Terminal={terminal_name.decode()}, Sender={sender_name.decode()}, "
-                      f"Serial={serial_number.decode()}, Status={response_status}")
-                
-                # Update last response time and status
-                last_response_time.value = time.time()
-                last_response_status.value = str(response_status)
-            except (socket.error, ConnectionResetError) as e:
-                print(f"Socket error while receiving data: {str(e)}")
+        while not stop_signal_received:
+            # Send a 45-byte GALC message
+            message = create_galc_message(empty=False)
+            conn.sendall(message)
+            readable_message = f"Receiver: {message[0:6].decode()}, Sender: {message[6:12].decode()}, Serial: {message[12:16].decode()}, Trigger: {message[44]:02d}"
+            print(f"Sent GALC message: {readable_message}")
+
+            # Expect a 26-byte response from the client
+            data = conn.recv(26)
+            if len(data) != 26:
+                print(f"Invalid response length: {len(data)}. Closing connection.")
                 break
-            
+
+            print(f"Received client response: Terminal: {data[0:6].decode()}, Sender: {data[6:12].decode()}, Serial: {data[12:16].decode()}, Status: {data[25]}")
+
+            # Process the 26-byte response
+            if data[25] == 1:  # Stop signal received
+                print("Stop signal received. Sending zero-filled message.")
+                zero_message = create_galc_message(empty=True)
+                conn.sendall(zero_message)
+                # stop_signal_received = True
+            else:
+                print("Keep-alive response received. Continuing communication.")
+
+            time.sleep(15)  # Wait before sending the next message
     except Exception as e:
-        print(f"Error in handle_client: {str(e)}")
+        print(f"Error handling client: {e}")
     finally:
-        print("Closing client connection")
-        try:
-            conn.close()
-        except:
-            pass
+        conn.close()
+        print(f"Connection with {addr} closed.")
+        active_connection = None  # Reset the active connection
+
 
 def start_fake_server():
-    host = '127.0.0.1'  # Use localhost for testing
-    port = 54321        # Port number
+    host = "127.0.0.1"
+    port = 54321
 
-    while True:
-        server_socket = None
-        try:
-            # Create a socket object
-            server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            # Bind the socket to the IP and port
-            server_socket.bind((host, port))
-            
-            # Start listening for incoming connections
-            server_socket.listen(1)
-            print(f"Fake server listening on {host}:{port}")
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
+        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server_socket.bind((host, port))
+        server_socket.listen(5)
+        print(f"GALC server is running and listening on {host}:{port}")
 
-            while True:
-                # Wait for a connection
-                conn, addr = server_socket.accept()
-                print(f"New client connection from {addr}")
-                # Handle client in a separate thread
-                client_thread = threading.Thread(target=handle_client, args=(conn, addr), daemon=True)
-                client_thread.start()
+        while True:
+            conn, addr = server_socket.accept()
+            threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
 
-        except Exception as e:
-            print(f"Server error: {str(e)}")
-            print("Restarting server in 5 seconds...")
-            time.sleep(5)
-        finally:
-            if server_socket:
-                try:
-                    print("Closing server socket")
-                    server_socket.close()
-                except:
-                    pass
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     start_fake_server()
