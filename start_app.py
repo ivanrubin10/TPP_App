@@ -66,11 +66,6 @@ def start_frontend(dev_mode=True):
 def main():
     dev_mode = False  # Change this to False for production (using built files)
 
-    # Get the machine's IP address
-    import socket
-    hostname = socket.gethostname()
-    ip_address = socket.gethostbyname(hostname)
-
     backend_process = start_backend()
     time.sleep(5)  # Wait for the backend to start
 
@@ -78,14 +73,14 @@ def main():
     time.sleep(3)  # Wait for frontend to start
 
     # Print access instructions
-    url = f"http://{ip_address}:8080"
+    local_url = "http://localhost:8080"
     print("\n" + "="*50)
     print(f"Application is running!")
-    print(f"You can access it at: {url}")
+    print(f"You can access it at: {local_url}")
     print("="*50 + "\n")
     
     # Open the browser
-    webbrowser.open(url)
+    webbrowser.open(local_url)
 
     try:
         # Keep the script running while both processes are active
