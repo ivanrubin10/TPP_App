@@ -6,6 +6,7 @@
                 <div class="footer-item-content">
                     <div class="footer-item-header">
                         <span class="footer-item-header-name">Esperado: {{ item.expectedPart }}</span>
+                        <span v-if="item.isQueued" class="queued-badge">En cola</span>
                     </div>
                     <img class="footer-item-image" src="@/assets/Car-2-icon.png" alt="Car Image">
                     <div class="footer-footer">
@@ -23,7 +24,14 @@ import { ref, onMounted, onUnmounted } from 'vue';
 
 const props = defineProps({
     items: {
-        type: Array as () => Array<{ id: string, expectedPart: string, actualPart: string, outcome: string,  date: string, }>,
+        type: Array as () => Array<{ 
+            id: string, 
+            expectedPart: string, 
+            actualPart: string, 
+            outcome: string,  
+            date: string,
+            isQueued: boolean 
+        }>,
         required: true
     },
     modelValue: {
@@ -79,9 +87,12 @@ function handleItemClick(index: number) {
 }
 
 function getItemStyle(index: number) {
-    if (items.value[index].outcome === 'GOOD') {
+    const item = items.value[index];
+    if (item.isQueued) {
+        return { backgroundImage: 'linear-gradient(180deg, var(--bg-300) 0%, var(--bg-400) 100%)' };
+    } else if (item.outcome === 'GOOD') {
         return { backgroundImage: 'linear-gradient(180deg, var(--good-100) 0%, var(--good-100) 100%)' };
-    } else if (items.value[index].outcome === 'NOGOOD') {
+    } else if (item.outcome === 'NOGOOD') {
         return { backgroundImage: 'linear-gradient(180deg, var(--no-good-100) 0%, var(--no-good-100) 100%)' };
     }
     return { backgroundColor: 'var(--bg-300)' };
@@ -201,5 +212,16 @@ onUnmounted(() => {
 .is-selected {
     border: var(--accent-200) 2px solid;
     transform: scale(1.1);
+}
+
+.queued-badge {
+    background-color: var(--accent-200);
+    width: min-content;
+    color: var(--bg-200);
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.8em;
+    margin-top: 4px;
+    display: inline-block;
 }
 </style>

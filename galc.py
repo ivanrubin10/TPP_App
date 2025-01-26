@@ -50,38 +50,65 @@ def handle_client(conn, addr):
     
     active_connection = addr  # Set the active connection
     print(f"New client connected from {addr}")
-    stop_signal_received = False
+    last_car_time = 0
+    keep_alive_interval = 5  # Send keep-alive every 5 seconds
+    car_data_interval = 30   # Send car data every 30 seconds
 
     try:
-        while not stop_signal_received:
-            # Send a 45-byte GALC message
-            message = create_galc_message(empty=False)
-            conn.sendall(message)
-            readable_message = f"Receiver: {message[0:6].decode()}, Sender: {message[6:12].decode()}, Serial: {message[12:16].decode()}, Trigger: {message[44]:02d}"
-            print(f"Sent GALC message: {readable_message}")
+        while True:
+            current_time = time.time()
+            
+            try:
+                # Check if it's time to send car data
+                if current_time - last_car_time >= car_data_interval:
+                    # Send car data
+                    message = create_galc_message(empty=False)
+                    conn.sendall(message)
+                    readable_message = f"Sent car data - Receiver: {message[0:6].decode()}, Sender: {message[6:12].decode()}, Serial: {message[12:16].decode()}, Trigger: {message[44]:02d}"
+                    print(readable_message)
+                    last_car_time = current_time
+                else:
+                    # Send keep-alive message
+                    message = create_galc_message(empty=True)
+                    conn.sendall(message)
+                    print("Sent keep-alive message")
 
-            # Expect a 26-byte response from the client
-            data = conn.recv(26)
-            if len(data) != 26:
-                print(f"Invalid response length: {len(data)}. Closing connection.")
+                # Wait for response with timeout
+                conn.settimeout(2.0)  # Set timeout for receiving response
+                try:
+                    data = conn.recv(26)
+                    if not data:
+                        print("Client disconnected (no data)")
+                        break
+                    if len(data) != 26:
+                        print(f"Warning: Unexpected response length: {len(data)}. Expected 26 bytes.")
+                        continue
+                    
+                    print(f"Received client response: Terminal: {data[0:6].decode()}, Sender: {data[6:12].decode()}, Serial: {data[12:16].decode()}, Status: {data[25]}")
+                except socket.timeout:
+                    print("No response received within timeout, continuing...")
+                    continue
+                except ConnectionResetError:
+                    print("Connection reset by client")
+                    break
+                
+                # Reset timeout for next iteration
+                conn.settimeout(None)
+
+                # Wait before next iteration
+                time.sleep(keep_alive_interval)
+
+            except socket.error as e:
+                print(f"Socket error during communication: {e}")
                 break
 
-            print(f"Received client response: Terminal: {data[0:6].decode()}, Sender: {data[6:12].decode()}, Serial: {data[12:16].decode()}, Status: {data[25]}")
-
-            # Process the 26-byte response
-            if data[25] == 1:  # Stop signal received
-                print("Stop signal received. Sending zero-filled message.")
-                zero_message = create_galc_message(empty=True)
-                conn.sendall(zero_message)
-                # stop_signal_received = True
-            else:
-                print("Keep-alive response received. Continuing communication.")
-
-            time.sleep(15)  # Wait before sending the next message
     except Exception as e:
         print(f"Error handling client: {e}")
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except:
+            pass
         print(f"Connection with {addr} closed.")
         active_connection = None  # Reset the active connection
 

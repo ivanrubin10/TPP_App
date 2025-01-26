@@ -1,8 +1,11 @@
 <template>
   <div class="content">
-    <div class="connection-status" @click="retryConnection">
+    <div class="connection-status" @click="handleRetryConnection">
       <div class="status-circle" :class="{ 'connected': isConnected }"></div>
       <span>{{ isConnected ? `${connectionType} Conectado` : `${connectionType} Desconectado` }}</span>
+      <svg class="reload-icon" :class="{ 'spinning': isRetrying }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+      </svg>
     </div>
     <div class="container" v-if="selectedItem">
       <div class="inspection-header">
@@ -36,7 +39,9 @@ import FalseOutcomeButton from '../components/FalseOutcomeButton.vue'
 import InspectionResults from '../components/InspectionResults.vue'
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import socket from '../composables/socket';
+import axios from 'axios';
 
+const baseUrl = 'http://localhost:5000'
 
 type Item = {
   id: string;
@@ -46,6 +51,7 @@ type Item = {
   image: string;
   resultImage: string;
   date: string;
+  isQueued: boolean;
 }
 
 const items = ref<Item[]>([]);
@@ -53,7 +59,7 @@ const isConnected = ref(false);
 const connectionType = ref('PLC');
 const messageBeingHandled = ref(false);
 
-const fetchedItems = ref();
+
 const selectedItem = ref();
 
 const { captureImage,
@@ -63,13 +69,55 @@ const { captureImage,
   updateItem,
   addLog,
   retryConnection,
- } = useBackendApi()
+  sendToICS,
+  getConfig } = useBackendApi()
+
+let clickHandle = false;
+
+const isRetrying = ref(false);
+
+const fetchQueuedCars = async () => {
+  try {
+    const response = await axios.get(`${baseUrl}/queued-cars`)
+    return response.data
+  } catch (error) {
+    console.error('Error fetching queued cars:', error)
+    throw error
+  }
+}
+
+const processQueuedCar = async (carId: string) => {
+  try {
+    const response = await axios.post(`${baseUrl}/process-queued-car/${carId}`)
+    return response.data
+  } catch (error) {
+    console.error('Error processing queued car:', error)
+    throw error
+  }
+}
+
+// Add a sorting function
+const sortItems = (items: Item[]) => {
+  return items.sort((a, b) => {
+    // First, prioritize queued (undetected) cars
+    if (a.isQueued && !b.isQueued) return -1;
+    if (!a.isQueued && b.isQueued) return 1;
+    
+    // Then sort by date (newest first)
+    const dateA = new Date(a.date.split(' ')[0].split('-').reverse().join('-'));
+    const dateB = new Date(b.date.split(' ')[0].split('-').reverse().join('-'));
+    return dateB.getTime() - dateA.getTime();
+  });
+};
 
 onMounted(async () => {
+  // Get initial config to set connection type
+  const config = await getConfig();
+  connectionType.value = config.connection_type;
+
   socket.on('connection_status', (data: any) => {
     isConnected.value = data.status;
-  }
-  );
+  });
 
   socket.on('connection_type', (data: any) => {
     connectionType.value = data.type;
@@ -79,7 +127,6 @@ onMounted(async () => {
     console.log(`Received message from PLC:`, data.message);
     await handleMessage(data, 'plc');
   });
-
 
   socket.on('handle_message', async (data: any) => {
     if (messageBeingHandled.value) {
@@ -98,6 +145,23 @@ onMounted(async () => {
     } finally {
       messageBeingHandled.value = false; // Reset the flag after processing
     }
+  });
+
+  // Listen for new queued cars from GALC
+  socket.on('new_queued_car', async (queuedCar: any) => {
+    console.log('Received new queued car:', queuedCar);
+    items.value.push({
+      id: queuedCar.car_id,
+      expectedPart: queuedCar.expected_part,
+      actualPart: '',
+      outcome: '',
+      image: '',
+      resultImage: '',
+      date: queuedCar.date,
+      isQueued: true
+    });
+    // Sort items whenever a new car is added
+    items.value = sortItems(items.value);
   });
 
   let isProcessing = false;
@@ -129,84 +193,96 @@ onMounted(async () => {
           return;
       }
 
-      const newItem = {
-        car_id: Math.random().toString(36).slice(2, 8),
-        date: formattedDate,
-        expected_part: expectedPart,
-        actual_part: '',
-        original_image_path: '',
-        result_image_path: '',
-        outcome: ''
-      };
-
-      await addLog(newItem);
-
-      items.value.push({
-        id: newItem.car_id,
-        expectedPart: newItem.expected_part,
-        actualPart: newItem.actual_part,
-        outcome: newItem.outcome,
-        image: newItem.original_image_path,
-        resultImage: newItem.result_image_path,
-        date: newItem.date
-      });
-      
-      selectedItem.value = items.value[items.value.length - 1];
-      await handleClick();
-
-      const response_message = expectedPart === selectedItem.value.actualPart ? 'GOOD' : 'NOGOOD';
+      // For PLC, process immediately. For GALC, this won't be called as we're using the queue system
       if (type === 'plc') {
-        socket.emit('plc_response', { message: response_message });
-      } else if (type === 'galc') {
-        socket.emit('galc_response', { message: response_message });
+        const newItem = {
+          car_id: Math.random().toString(36).slice(2, 8),
+          date: formattedDate,
+          expected_part: expectedPart,
+          actual_part: '',
+          original_image_path: '',
+          result_image_path: '',
+          outcome: ''
+        };
+
+        await addLog(newItem);
+
+        items.value.push({
+          id: newItem.car_id,
+          expectedPart: newItem.expected_part,
+          actualPart: newItem.actual_part,
+          outcome: newItem.outcome,
+          image: newItem.original_image_path,
+          resultImage: newItem.result_image_path,
+          date: newItem.date,
+          isQueued: false
+        });
+        
+        selectedItem.value = items.value[items.value.length - 1];
+        await handleClick();
+
+        socket.emit('plc_response', { message: expectedPart === selectedItem.value.actualPart ? 'GOOD' : 'NOGOOD' });
       }
     } finally {
       isProcessing = false;
     }
   }
 
-  await fetchLogs().then((response) => {
-    console.log(response);
-    fetchedItems.value = response;
-    response.forEach((item: any) => {
-      items.value.push({
-        id: item.car_id,
-        expectedPart: item.expected_part,
-        actualPart: item.actual_part,
-        outcome: item.outcome,
-        image: item.original_image_path,
-        resultImage: item.result_image_path,
-        date: item.date,
+  // Fetch both logs and queued cars
+  await Promise.all([
+    fetchLogs().then((response) => {
+      console.log('Fetched logs:', response);
+      response.forEach((item: any) => {
+        items.value.push({
+          id: item.car_id,
+          expectedPart: item.expected_part,
+          actualPart: item.actual_part,
+          outcome: item.outcome,
+          image: item.original_image_path,
+          resultImage: item.result_image_path,
+          date: item.date,
+          isQueued: false
+        });
+      });
+    }),
+    fetchQueuedCars().then((queuedCars) => {
+      console.log('Fetched queued cars:', queuedCars);
+      queuedCars.forEach((car: any) => {
+        items.value.push({
+          id: car.car_id,
+          expectedPart: car.expected_part,
+          actualPart: '',
+          outcome: '',
+          image: '',
+          resultImage: '',
+          date: car.date,
+          isQueued: true
+        });
       });
     })
-    items.value.forEach((item) => {
-      const foundItem = fetchedItems.value.find((fetchedItem: { car_id: string; }) => fetchedItem.car_id === item.id);
-      if (foundItem) {
-        item.image = foundItem.original_image_path;
-        item.resultImage = foundItem.result_image_path;
-        item.outcome = foundItem.outcome;
-        item.actualPart = foundItem.actual_part;
-        item.date = foundItem.date;
-      }
-    });
-  });
-  console.log("fetched: ", fetchedItems.value)
-  // assign the images to the items
+  ]);
 
+  // Sort all items after fetching
+  items.value = sortItems(items.value);
 });
 
 onBeforeUnmount(() => {
-  // Clean up the event listeners when the component is unmounted
   socket.off('connection_status');
   socket.off('connection_type');
   socket.off('handle_message');
+  socket.off('new_queued_car');
 });
 
-const handleItemClicked = (item: any) => {
+const handleItemClicked = async (item: any) => {
   selectedItem.value = item;
+  
+  // If it's a queued car, just mark it as selected but don't process automatically
+  if (item.isQueued) {
+    // Only update the UI to show it's selected
+    return;
+  }
 };
 
-let clickHandle = false;
 const handleClick = async () => {
   if (clickHandle) {
     return;
@@ -214,7 +290,14 @@ const handleClick = async () => {
 
   clickHandle = true;
   try {
-    const data = await captureImage();
+    // Prepare car parameters for ICS if using GALC
+    const carParams = connectionType.value === 'GALC' ? {
+      car_id: selectedItem.value.id,
+      expected_part: selectedItem.value.expectedPart,
+      actual_part: selectedItem.value.actualPart
+    } : undefined;
+    
+    const data = await captureImage(carParams);
     console.log('Captured data:', data);
 
     const currentDate = new Date();
@@ -238,6 +321,21 @@ const handleClick = async () => {
       selectedItem.value.outcome = "GOOD";
     } else {
       selectedItem.value.outcome = "NOGOOD";
+      console.log(connectionType.value); 
+      // If GALC and NOGOOD, send to ICS
+      if (connectionType.value === 'GALC') {
+        console.log("Sending to ICS");
+        try {
+          await sendToICS({
+            car_id: selectedItem.value.id,
+            expected_part: selectedItem.value.expectedPart,
+            actual_part: selectedItem.value.actualPart,
+            image: data.resultImage
+          });
+        } catch (error) {
+          console.error('Error sending to ICS:', error);
+        }
+      }
     }
     const carId = selectedItem.value.id;
 
@@ -252,8 +350,8 @@ const handleClick = async () => {
         date: selectedItem.value.date,
         expected_part: selectedItem.value.expectedPart,
         actual_part: selectedItem.value.actualPart,
-        original_image_path: data.image, // Update original image path if needed
-        result_image_path: data.resultImage, // Update result image path
+        original_image_path: data.image,
+        result_image_path: data.resultImage,
         outcome: selectedItem.value.outcome,
       };
       await updateItem(itemToUpdate);
@@ -264,14 +362,29 @@ const handleClick = async () => {
         date: selectedItem.value.date,
         expected_part: selectedItem.value.expectedPart,
         actual_part: selectedItem.value.actualPart,
-        original_image_path: data.image, // Store the new image path
-        result_image_path: data.resultImage, // Store the new result image path
+        original_image_path: data.image,
+        result_image_path: data.resultImage,
         outcome: selectedItem.value.outcome,
       };
       await addLog(newLog);
     }
+
+    // If this was a queued car that was just processed, mark it as processed
+    if (selectedItem.value.isQueued) {
+      await processQueuedCar(carId);
+      selectedItem.value.isQueued = false;
+    }
+
   } catch (error) {
     console.error('Error capturing data:', error);
+    if (connectionType.value === 'GALC') {
+      // ElNotification({
+      //   title: 'Error',
+      //   message: 'Error al procesar la detección',
+      //   type: 'error',
+      //   duration: 3000
+      // });
+    }
   }
 
   clickHandle = false;
@@ -283,6 +396,19 @@ function esDefecto(item: any) {
 function noEsDefecto(item: any) {
   console.log("no es defecto", item);
 }
+
+const handleRetryConnection = async () => {
+  if (isRetrying.value) return;
+  
+  isRetrying.value = true;
+  try {
+    await retryConnection();
+  } catch (error) {
+    console.error('Error retrying connection:', error);
+  } finally {
+    isRetrying.value = false;
+  }
+};
 </script>
 
 <style scoped>
@@ -392,5 +518,31 @@ function noEsDefecto(item: any) {
     padding: 1rem 0;
     margin-top: 1rem;
   }
+}
+
+.reload-icon {
+  margin-left: 10px;
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  transition: transform 0.3s ease;
+  color: var(--text-100);
+}
+
+.reload-icon.spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.connection-status:hover .reload-icon:not(.spinning) {
+  transform: rotate(90deg);
 }
 </style>

@@ -10,6 +10,7 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_marshmallow import Marshmallow
 from marshmallow_sqlalchemy import SQLAlchemySchema, auto_field
 from dataclasses import dataclass
+from ics_integration import ICSIntegration
 
 
 app = Flask(__name__, static_folder='../application-ui', static_url_path='/')
@@ -24,6 +25,7 @@ app.config['UPLOAD_FOLDER'] = 'uploads/'
 
 db = SQLAlchemy(app)
 ma = Marshmallow(app)
+ics = ICSIntegration()  # Initialize ICS integration
 
 # Define CarLog model
 class CarLog(db.Model):
@@ -35,6 +37,14 @@ class CarLog(db.Model):
     original_image_path = db.Column(db.String(200), nullable=False)
     result_image_path = db.Column(db.String(200), nullable=False)
     outcome = db.Column(db.String(200), nullable=False)
+
+# Define QueuedCar model for GALC cars waiting to be processed
+class QueuedCar(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    car_id = db.Column(db.String(50), unique=True, nullable=False)
+    date = db.Column(db.String(50), nullable=False)
+    expected_part = db.Column(db.String(200), nullable=False)
+    is_processed = db.Column(db.Boolean, default=False)
 
 class CarLogSchema(SQLAlchemySchema):
     class Meta:
@@ -50,8 +60,21 @@ class CarLogSchema(SQLAlchemySchema):
     result_image_path = auto_field()
     outcome = auto_field()
 
+class QueuedCarSchema(SQLAlchemySchema):
+    class Meta:
+        model = QueuedCar
+        load_instance = True
+
+    id = auto_field()
+    car_id = auto_field()
+    date = auto_field()
+    expected_part = auto_field()
+    is_processed = auto_field()
+
 car_log_schema = CarLogSchema()
 car_logs_schema = CarLogSchema(many=True)
+queued_car_schema = QueuedCarSchema()
+queued_cars_schema = QueuedCarSchema(many=True)
 
 # Initialize the database tables
 with app.app_context():
@@ -83,53 +106,113 @@ galc_connection = None
 plc_connection = None
 
 message_processing = False
+
 # Added GALC response handling and connection logic
 def handle_galc_response(conn):
     global message_processing, is_connected, galc_connection
     message_processing = False
+    
+    # Set socket timeout for initial connection
+    conn.settimeout(5.0)
+    
     while True:
-        socketio.emit('connection_status', {'status': True if is_connected else False})
-        socketio.emit('connection_type', {'type': config['connection_type']})
         try:
+            socketio.emit('connection_status', {'status': True if is_connected else False})
+            socketio.emit('connection_type', {'type': config['connection_type']})
+
             # Receive the 45-byte GALC message
-            data = conn.recv(45)
-            if len(data) != 45:
-                print(f"Invalid GALC message length: {len(data)}. Closing connection.")
+            try:
+                data = conn.recv(45)
+                if not data:
+                    print("Connection closed by GALC server")
+                    break
+                if len(data) != 45:
+                    print(f"Warning: Unexpected GALC message length: {len(data)}. Expected 45 bytes.")
+                    continue
+
+                print(f"Received GALC message: Receiver: {data[0:6].decode()}, "
+                      f"Sender: {data[6:12].decode()}, Serial: {data[12:16].decode()}, "
+                      f"Trigger: {data[44]:02d}")
+
+                # Extract and handle the last two bytes
+                last_two_bytes = data[43:45]
+                trigger_value = int.from_bytes(last_two_bytes, "big")  # Convert to integer
+                trigger_str = f"{trigger_value:02d}"  # Ensure it is a 2-digit string
+
+                # Only process non-empty messages (car data)
+                if trigger_str in ["01", "05", "08"]:
+                    # Get expected part based on trigger value
+                    expected_part = {
+                        "01": "Capo tipo 1",
+                        "05": "Capo tipo 2",
+                        "08": "Capo tipo 3"
+                    }.get(trigger_str)
+
+                    if expected_part:
+                        # Generate a unique car ID
+                        car_id = f"CAR_{int(time.time())}_{trigger_str}"
+                        current_date = time.strftime("%d-%m-%Y %H:%M:%S")
+
+                        # Create a new queued car entry
+                        new_queued_car = QueuedCar(
+                            car_id=car_id,
+                            date=current_date,
+                            expected_part=expected_part,
+                            is_processed=False
+                        )
+                        
+                        # Use application context for database operations
+                        with app.app_context():
+                            try:
+                                db.session.add(new_queued_car)
+                                db.session.commit()
+                                # Create a dictionary representation for the socket emission
+                                car_data = {
+                                    'car_id': new_queued_car.car_id,
+                                    'date': new_queued_car.date,
+                                    'expected_part': new_queued_car.expected_part,
+                                    'is_processed': new_queued_car.is_processed
+                                }
+                                # Notify frontend about new queued car
+                                socketio.emit('new_queued_car', car_data)
+                            except Exception as e:
+                                print(f"Error adding queued car to database: {e}")
+                                db.session.rollback()
+
+                # Send a 26-byte response
+                response = bytearray(26)
+                response[:6] = data[6:12]  # Sender to receiver
+                response[6:12] = data[0:6]  # Receiver to sender
+                response[12:16] = data[12:16]  # Serial number
+                response[25] = 0  # Always send keep-alive flag since we're just queueing
+                
+                try:
+                    conn.sendall(response)
+                    print(f"Sent GALC response: Receiver: {response[0:6].decode()}, "
+                          f"Sender: {response[6:12].decode()}, Serial: {response[12:16].decode()}, "
+                          f"Status: {response[25]}")
+                except socket.error as e:
+                    print(f"Error sending response to GALC: {e}")
+                    break
+
+            except socket.timeout:
+                print("No data received from GALC within timeout")
+                continue
+            except ConnectionResetError:
+                print("Connection reset by GALC server")
                 break
-
-            print(f"Received GALC message: Receiver: {data[0:6].decode()}, "
-                  f"Sender: {data[6:12].decode()}, Serial: {data[12:16].decode()}, "
-                  f"Trigger: {data[44]:02d}")
-
-            # Extract and handle the last two bytes
-            last_two_bytes = data[43:45]
-            trigger_value = int.from_bytes(last_two_bytes, "big")  # Convert to integer
-            trigger_str = f"{trigger_value:02d}"  # Ensure it is a 2-digit string
-
-
-            if trigger_str in ["01", "05", "08"] and message_processing == False:
-                print(f"Triggering Vue.js handler with value: {trigger_str}")
-                socketio.emit('handle_message', {'message': trigger_str})  # Notify Vue.js frontend with defined message
-
-            # Send a 26-byte response
-            response = bytearray(26)
-            response[:6] = data[6:12]  # Sender to receiver
-            response[6:12] = data[0:6]  # Receiver to sender
-            response[12:16] = data[12:16]  # Serial number
-            response[25] = 1 if message_processing else 0  # Stop or keep-alive flag
-            conn.sendall(response)
-            print(f"Sent GALC response: Receiver: {response[0:6].decode()}, "
-                  f"Sender: {response[6:12].decode()}, Serial: {response[12:16].decode()}, "
-                  f"Status: {response[25]}")
-            
-            message_processing = True
 
         except Exception as e:
             print(f"Error handling GALC message: {e}")
             break
-    conn.close()
+    
+    try:
+        conn.close()
+    except:
+        pass
     is_connected = False  # Update connection status
     galc_connection = None  # Reset GALC connection
+    print("GALC connection handler terminated")
 
 def connect_to_galc():
     global client_socket, is_connected, galc_connection
@@ -245,31 +328,54 @@ def handle_retry_connection():
 
 @app.route('/capture-image', methods=['GET'])
 def capture_and_detect():
-  global config, capturing
-  
-  capturing = True
-  try:
-    print("Capturing image...")
-    image = capture_image()
-    print("Image captured!")
-    # Try with application path first, fallback to current directory
+    global config, capturing
+    
+    capturing = True
     try:
-        model_path = './application/detect.tflite'
-        label_path = './application/labelmap.txt'
-        with open(label_path, 'r') as f:
-            labels = [line.strip() for line in f.readlines()]
-    except FileNotFoundError:
-        model_path = './detect.tflite'
-        label_path = './labelmap.txt'
-        with open(label_path, 'r') as f:
-            labels = [line.strip() for line in f.readlines()]
+        print("Capturing image...")
+        image = capture_image()
+        print("Image captured!")
+        # Try with application path first, fallback to current directory
+        try:
+            model_path = './application/detect.tflite'
+            label_path = './application/labelmap.txt'
+            with open(label_path, 'r') as f:
+                labels = [line.strip() for line in f.readlines()]
+        except FileNotFoundError:
+            model_path = './detect.tflite'
+            label_path = './labelmap.txt'
+            with open(label_path, 'r') as f:
+                labels = [line.strip() for line in f.readlines()]
 
-    print(config['min_conf_threshold'])
-    result_image, detected_objects = tflite_detect_image(model_path, image, labels, config['min_conf_threshold'])
-    print("Objects detected!")
-    return jsonify({'image': image, 'objects': detected_objects, 'result_image': result_image})
-  except Exception as e:
-    return jsonify({'error': str(e)}), 500  # Internal Server Error
+        print(config['min_conf_threshold'])
+        result_image, detected_objects = tflite_detect_image(model_path, image, labels, config['min_conf_threshold'])
+        print("Objects detected!")
+        
+        # Return detection results
+        response_data = {'image': image, 'objects': detected_objects, 'result_image': result_image}
+        
+        # If this is a queued car and the result will be NG, send to ICS
+        if request.args.get('car_id') and request.args.get('expected_part') and request.args.get('actual_part'):
+            car_id = request.args.get('car_id')
+            expected_part = request.args.get('expected_part')
+            actual_part = request.args.get('actual_part')
+            
+            # Only send to ICS if result is NG
+            if expected_part != actual_part:
+                # First get the VIN
+                vin = ics.request_vin(car_id)
+                if vin:
+                    # Send defect data to ICS
+                    ics.send_defect_data(
+                        vin=vin,
+                        image_base64=result_image,  # Use the processed image
+                        expected_part=expected_part,
+                        actual_part=actual_part
+                    )
+        
+        return jsonify(response_data)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500  # Internal Server Error
 
 @app.route('/check-car/<car_id>', methods=['GET'])
 def check_car(car_id):
@@ -380,7 +486,44 @@ def handle_config():
         
         return jsonify({"message": "Configuration updated successfully"}), 200
 
+# Add new endpoint to get queued cars
+@app.route('/queued-cars', methods=['GET'])
+def get_queued_cars():
+    queued_cars = QueuedCar.query.filter_by(is_processed=False).all()
+    return jsonify(queued_cars_schema.dump(queued_cars))
 
+# Add endpoint to mark a queued car as processed
+@app.route('/process-queued-car/<car_id>', methods=['POST'])
+def process_queued_car(car_id):
+    queued_car = QueuedCar.query.filter_by(car_id=car_id).first()
+    if queued_car:
+        queued_car.is_processed = True
+        db.session.commit()
+        return jsonify({"message": "Car marked as processed"}), 200
+    return jsonify({"error": "Car not found"}), 404
+
+@app.route('/send-to-ics', methods=['POST'])
+def send_to_ics():
+    try:
+        data = request.get_json()
+        car_id = data['car_id']
+        expected_part = data['expected_part']
+        actual_part = data['actual_part']
+        image_base64 = data['image']
+
+        # Get VIN and send to ICS
+        vin = ics.request_vin(car_id)
+        if vin:
+            ics.send_defect_data(
+                vin=vin,
+                image_base64=image_base64,
+                expected_part=expected_part,
+                actual_part=actual_part
+            )
+            return jsonify({'message': 'Sent to ICS successfully'}), 200
+        return jsonify({'error': 'Could not get VIN'}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)

@@ -9,9 +9,16 @@ export function useBackendApi() {
   const resultImage = ref('')
   const logs = ref([])
 
-   const captureImage = async () => {
+   const captureImage = async (carParams) => {
     try {
-      const response = await axios.get(`${baseUrl}/capture-image`)
+      let url = `${baseUrl}/capture-image`
+      
+      // Add car parameters for ICS integration if provided
+      if (carParams) {
+        url += `?car_id=${carParams.car_id}&expected_part=${encodeURIComponent(carParams.expected_part)}&actual_part=${encodeURIComponent(carParams.actual_part)}`
+      }
+      
+      const response = await axios.get(url)
       const data = response.data
       capturedImage.value = `data:image/jpeg;base64,${data.image}`
       detectedObjects.value = data.objects
@@ -23,7 +30,7 @@ export function useBackendApi() {
       }
     } catch (error) {
       console.error('Error capturing image:', error)
-      throw error // Re-throw for handling in component
+      throw error
     }
   }
 
@@ -97,6 +104,16 @@ export function useBackendApi() {
     }
   }
 
+  const sendToICS = async (data) => {
+    try {
+      const response = await axios.post(`${baseUrl}/send-to-ics`, data)
+      return response.data
+    } catch (error) {
+      console.error('Error sending to ICS:', error)
+      throw error
+    }
+  }
+
   return {
     captureImage,
     capturedImage,
@@ -110,5 +127,6 @@ export function useBackendApi() {
     getConfig,
     saveConfig,
     retryConnection,
+    sendToICS,
   }
 }
