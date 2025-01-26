@@ -29,12 +29,13 @@ def start_frontend(dev_mode=True):
             print("Starting Vue.js frontend (development mode)...")
             os.chdir('application-ui')
             frontend_process = subprocess.Popen(
-                ['npm', 'run', 'dev'],
+                'npm run dev',
                 shell=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 universal_newlines=True,
-                bufsize=1
+                bufsize=1,
+                env=dict(os.environ, PATH=os.environ['PATH'])
             )
         else:
             print("Serving Vue.js frontend (production mode)...")
@@ -42,11 +43,12 @@ def start_frontend(dev_mode=True):
             print("Building frontend...")
             # Build the frontend
             build_result = subprocess.run(
-                ['npm', 'run', 'build'],
+                'npm run build',
                 shell=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                universal_newlines=True
+                universal_newlines=True,
+                env=dict(os.environ, PATH=os.environ['PATH'])
             )
             
             if build_result.returncode != 0:
@@ -57,7 +59,7 @@ def start_frontend(dev_mode=True):
             print("Starting HTTP server...")
             # Start HTTP server on 0.0.0.0 to allow external access
             frontend_process = subprocess.Popen(
-                ['python', '-m', 'http.server', '8080', '--bind', '0.0.0.0', '--directory', 'dist'],
+                'python -m http.server 8080 --bind 0.0.0.0 --directory dist',
                 shell=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
