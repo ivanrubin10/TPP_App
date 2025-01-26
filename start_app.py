@@ -2,6 +2,33 @@ import subprocess
 import os
 import time
 import platform
+import webbrowser
+
+def open_browser_url(url):
+    print(f"Attempting to open browser at {url}...")
+    try:
+        # Try the default browser first
+        if webbrowser.open(url):
+            return
+        
+        # If default browser fails, try platform-specific approaches
+        system = platform.system().lower()
+        if system == 'linux':
+            # Try common browsers on Linux
+            browsers = ['xdg-open', 'firefox', 'chromium-browser', 'chromium', 'google-chrome']
+            for browser in browsers:
+                try:
+                    subprocess.Popen([browser, url])
+                    return
+                except FileNotFoundError:
+                    continue
+        elif system == 'windows':
+            os.startfile(url)
+            return
+        
+    except Exception as e:
+        print(f"Note: Could not open browser automatically ({str(e)})")
+        print(f"Please open {url} manually in your browser")
 
 def start_backend():
     print("Starting Flask backend...")
@@ -101,11 +128,15 @@ def main():
     print("Frontend started, waiting for initialization...")
     time.sleep(3)  # Wait for frontend to start
 
-    # Print access instructions
+    # Print access instructions and open browser
+    url = f"http://{ip_address}:8080"
     print("\n" + "="*50)
     print(f"Application is running!")
-    print(f"You can access it at: http://{ip_address}:8080")
+    print(f"You can access it at: {url}")
     print("="*50 + "\n")
+    
+    # Try to open the browser
+    open_browser_url(url)
 
     try:
         # Keep the script running while both processes are active
