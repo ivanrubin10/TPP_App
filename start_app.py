@@ -1,7 +1,6 @@
 import subprocess
 import os
 import time
-import webbrowser
 import platform
 
 def start_backend():
@@ -37,6 +36,7 @@ def start_frontend(dev_mode=True):
     else:
         print("Serving Vue.js frontend (production mode)...")
         os.chdir('application-ui')
+        # Build the frontend
         subprocess.run(
             ['npm', 'run', 'build'],
             shell=True,
@@ -44,8 +44,9 @@ def start_frontend(dev_mode=True):
             stderr=subprocess.STDOUT,
             universal_newlines=True
         )
+        # Start HTTP server on 0.0.0.0 to allow external access
         frontend_process = subprocess.Popen(
-            ['python', '-m', 'http.server', '--directory', 'dist', '8080'],
+            ['python', '-m', 'http.server', '8080', '--bind', '0.0.0.0', '--directory', 'dist'],
             shell=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -62,28 +63,25 @@ def start_frontend(dev_mode=True):
     threading.Thread(target=print_output, daemon=True).start()
     return frontend_process
 
-def open_browser(dev_mode=True):
-    if dev_mode:
-        url = "http://localhost:5173"  # Default port for Vite in Vue.js dev mode
-    else:
-        url = "http://localhost:8080"  # Port for the production server
-
-    print(f"Opening browser at {url}...")
-    webbrowser.open(url)
-
 def main():
     dev_mode = False  # Change this to False for production (using built files)
+
+    # Get the machine's IP address
+    import socket
+    hostname = socket.gethostname()
+    ip_address = socket.gethostbyname(hostname)
 
     backend_process = start_backend()
     time.sleep(5)  # Wait for the backend to start
 
     frontend_process = start_frontend(dev_mode)
-    
-    # Give the frontend some time to start before opening the browser
-    time.sleep(3)  # Adjust this sleep time if necessary
+    time.sleep(3)  # Wait for frontend to start
 
-    # Open the browser to the frontend URL
-    open_browser(dev_mode)
+    # Print access instructions
+    print("\n" + "="*50)
+    print(f"Application is running!")
+    print(f"You can access it at: http://{ip_address}:8080")
+    print("="*50 + "\n")
 
     try:
         # Keep the script running while both processes are active
