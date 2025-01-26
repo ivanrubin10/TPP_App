@@ -1,7 +1,6 @@
 import subprocess
 import os
 import time
-import webbrowser
 
 def start_backend():
     print("Starting Flask backend...")
@@ -79,8 +78,11 @@ def main():
     print(f"You can access it at: {local_url}")
     print("="*50 + "\n")
     
-    # Open the browser
-    webbrowser.open(local_url)
+    # Open the browser using chromium-browser
+    try:
+        subprocess.Popen(['chromium-browser', local_url], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except:
+        print("Note: Could not open browser automatically. Please open the URL manually.")
 
     try:
         # Keep the script running while both processes are active
