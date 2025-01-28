@@ -3,20 +3,21 @@
     <div class="config-content">
       <h1>Configuración</h1>
 
-      <!-- Campo para el umbral -->
+      <!-- Threshold input -->
       <div class="umbral-input">
         <label for="umbral">Umbral (Threshold):</label>
         <input
-          v-model.number="umbral"
+          v-model.number="threshold"
           type="number"
           id="umbral"
           class="umbral"
           min="0.5"
           max="1.0"
+          step="0.1"
         />
       </div>
 
-      <!-- Selector de tipo de conexión -->
+      <!-- Connection type selector -->
       <div class="connection-type">
         <label>Tipo de Conexión:</label>
         <div class="toggle-buttons">
@@ -35,7 +36,7 @@
         </div>
       </div>
 
-      <!-- Campos para PLC -->
+      <!-- PLC fields -->
       <div v-if="connectionType === 'PLC'">
         <div class="plc-input">
           <label for="plc-host">PLC Host:</label>
@@ -55,7 +56,7 @@
         </div>
       </div>
 
-      <!-- Campos para GALC -->
+      <!-- GALC fields -->
       <div v-if="connectionType === 'GALC'">
         <div class="plc-input">
           <label for="galc-host">GALC Host:</label>
@@ -80,49 +81,50 @@
   </div>
 </template>
 
-<script setup>
-import { ref, onMounted } from 'vue'
-import { useBackendApi } from '../composables/useBackendApi'
+<script setup lang="ts">
+import { ref, onMounted } from 'vue';
+import { useAppStore } from '@/stores/useAppStore';
+import type { AppConfig } from '@/types';
 
-const { getConfig, saveConfig } = useBackendApi()
+const store = useAppStore();
 
-// Variables reactivas para la configuración
-const umbral = ref('')
-const connectionType = ref('PLC')
-const plcHost = ref('')
-const plcPort = ref(0)
-const galcHost = ref('')
-const galcPort = ref(0)
+const threshold = ref(0.7);
+const connectionType = ref<'PLC' | 'GALC'>('PLC');
+const plcHost = ref('127.0.0.1');
+const plcPort = ref(12345);
+const galcHost = ref('127.0.0.1');
+const galcPort = ref(54321);
 
-// Obtener configuración inicial al montar el componente
-onMounted(() => {
-  getConfig().then((config) => {
-    umbral.value = config.min_conf_threshold
-    connectionType.value = config.connection_type
-    plcHost.value = config.plc_host
-    plcPort.value = config.plc_port
-    galcHost.value = config.galc_host
-    galcPort.value = config.galc_port
-  })
-})
+onMounted(async () => {
+  await store.loadConfig();
+  if (store.config) {
+    threshold.value = store.config.min_conf_threshold;
+    connectionType.value = store.config.connection_type;
+    plcHost.value = store.config.plc_host;
+    plcPort.value = store.config.plc_port;
+    galcHost.value = store.config.galc_host;
+    galcPort.value = store.config.galc_port;
+  }
+});
 
-// Guardar la configuración en el backend
 const handleSave = async () => {
   try {
-    await saveConfig({
-      min_conf_threshold: umbral.value,
+    const config: AppConfig = {
+      min_conf_threshold: threshold.value,
       connection_type: connectionType.value,
       plc_host: plcHost.value,
       plc_port: plcPort.value,
       galc_host: galcHost.value,
       galc_port: galcPort.value
-    })
-    alert('Configuración guardada exitosamente!')
+    };
+    
+    await store.updateConfig(config);
+    alert('Configuración guardada exitosamente!');
   } catch (error) {
-    alert('Error al guardar la configuración.')
-    console.error(error)
+    console.error('Error saving config:', error);
+    alert('Error al guardar la configuración.');
   }
-}
+};
 </script>
 
 <style scoped>
@@ -209,10 +211,11 @@ label {
   border: var(--text-200) 2px solid;
   border-radius: 4px;
   cursor: pointer;
+  transition: background-color 0.3s ease;
 }
 
 .save-button:hover {
-  background-color: #45a049;
+  background-color: var(--bg-400);
 }
 
 @media (min-width: 1024px) {

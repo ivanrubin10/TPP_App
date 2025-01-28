@@ -13,12 +13,12 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-for="item in items" :key="item.id" :class="{ 'good': item.outcome === 'GOOD', 'nogood': item.outcome === 'NOGOOD' }">
-              <td>{{ (item as any).id }}</td>
-              <td>{{ (item as any).date }}</td>
-              <td>{{ (item as any).expectedPart }}</td>
-              <td>{{ (item as any).actualPart }}</td>
-              <td>{{ (item as any).outcome }}</td>
+            <tr v-for="item in store.items" :key="item.id" :class="{ 'good': item.outcome === 'GOOD', 'nogood': item.outcome === 'NOGOOD' }">
+              <td>{{ item.id }}</td>
+              <td>{{ item.date }}</td>
+              <td>{{ item.expectedPart }}</td>
+              <td>{{ item.actualPart }}</td>
+              <td>{{ item.outcome }}</td>
             </tr>
           </tbody>
         </table>
@@ -27,39 +27,28 @@
   </template>
   
   <script setup lang="ts">
-  import { useBackendApi } from '../composables/useBackendApi'
-  import { onMounted, ref } from 'vue';
+  import { onMounted, onUnmounted } from 'vue';
+  import { useAppStore } from '@/stores/useAppStore';
   
-  const items = ref<Item[]>([]);
+  const store = useAppStore();
   
-  const {
-    fetchLogs,
-  } = useBackendApi()
+  onMounted(async () => {
+    await store.loadLogs();
+  });
   
-  type Item = {
-    id: string;
-    expectedPart: string;
-    actualPart: string;
-    outcome: string;
-    image: string;
-    resultImage: string;
-    date: string;
-  }
-  
+  // Force refresh data every minute
+  let refreshInterval: number;
   onMounted(() => {
-    fetchLogs().then((response) => {
-      console.log(response);
-      items.value = response.map((item: any): Item => ({
-        id: item.car_id,
-        expectedPart: item.expected_part,
-        actualPart: item.actual_part,
-        outcome: item.outcome,
-        image: item.original_image_path,
-        resultImage: item.result_image_path,
-        date: item.date
-      } as Item));
-    });
-  })
+    refreshInterval = window.setInterval(() => {
+      store.loadLogs(true);
+    }, 60000);
+  });
+  
+  onUnmounted(() => {
+    if (refreshInterval) {
+      clearInterval(refreshInterval);
+    }
+  });
   </script>
   
   <style>

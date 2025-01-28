@@ -1,7 +1,7 @@
 <template>
     <div class="footer-container" ref="scrollableContainer" @mousedown="handleMouseDown" @wheel="handleWheel">
         <div class="footer-content" ref="footerContent">
-            <div class="footer-item" v-for="(item, index) in items" :key="index" :style="getItemStyle(index)"
+            <div class="footer-item" v-for="(item, index) in props.items" :key="index" :style="getItemStyle(index)"
                 @click="handleItemClick(index)">
                 <div class="footer-item-content">
                     <div class="footer-item-header">
@@ -21,6 +21,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
+import type { CarItem } from '@/types';
 
 const props = defineProps({
     items: {
@@ -35,13 +36,13 @@ const props = defineProps({
         required: true
     },
     modelValue: {
-        type: Object,
+        type: Object as () => CarItem | null,
+        default: null
     }
 });
 
 const emit = defineEmits(['update:modelValue', 'item-clicked']);
 
-const items = ref(props.items);
 const scrollableContainer = ref<HTMLDivElement | null>(null);
 const footerContent = ref<HTMLDivElement | null>(null);
 let isDragging = false;
@@ -78,7 +79,7 @@ const handleWheel = (e: WheelEvent) => {
 };
 
 function handleItemClick(index: number) {
-    emit('item-clicked', items.value[index]);
+    emit('item-clicked', props.items[index]);
     const itemsElements = document.querySelectorAll('.footer-item');
     itemsElements.forEach((item) => {
         item.classList.remove('is-selected');
@@ -87,7 +88,7 @@ function handleItemClick(index: number) {
 }
 
 function getItemStyle(index: number) {
-    const item = items.value[index];
+    const item = props.items[index];
     if (item.isQueued) {
         return { backgroundImage: 'linear-gradient(180deg, var(--bg-300) 0%, var(--bg-400) 100%)' };
     } else if (item.outcome === 'GOOD') {

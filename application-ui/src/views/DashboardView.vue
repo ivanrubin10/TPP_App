@@ -6,21 +6,21 @@
             <!-- Summary Cards -->
             <div class="summary-card">
                 <h3>Inspecciones totales</h3>
-                <div class="stat">{{ items.length }}</div>
+                <div class="stat">{{ store.items.length }}</div>
             </div>
             <div class="summary-card">
                 <h3>Tasa de éxito</h3>
-                <div class="stat">{{ Math.round((goodCount / items.length) * 100) || 0 }}%</div>
+                <div class="stat">{{ store.successRate }}%</div>
             </div>
             <div class="summary-card">
                 <h3>Tasa de fallos</h3>
-                <div class="stat">{{ Math.round((noGoodCount / items.length) * 100) || 0 }}%</div>
+                <div class="stat">{{ 100 - store.successRate }}%</div>
             </div>
 
             <!-- Charts -->
             <div class="chart-container" @click="openModal('pie')">
                 <h3>Resultados de inspección</h3>
-                <Pie :data="pieChartData" :options="pieChartOptions" />
+                <Pie :data="pieChartData" :options="baseChartOptions" />
             </div>
 
             <div class="chart-container" @click="openModal('line')">
@@ -42,7 +42,7 @@
                         </tr>
                     </thead>
                     <tbody>
-                        <tr v-for="item in items.slice(0, 10)" :key="item.id"
+                        <tr v-for="item in store.items.slice(0, 10)" :key="item.id"
                             :class="{ 'good': item.outcome === 'GOOD', 'nogood': item.outcome === 'NOGOOD' }">
                             <td>{{ item.id }}</td>
                             <td>{{ item.date }}</td>
@@ -60,9 +60,9 @@
             <div class="modal-content" @click.stop>
                 <span class="close" @click="closeModal">&times;</span>
                 <div class="modal-chart">
-                    <h3>{{ selectedChart === 'pie' ? 'Inspection Results' : 'Daily Inspections' }}</h3>
-                    <Pie v-if="selectedChart === 'pie'" :data="pieChartData" :options="modalPieChartOptions" />
-                    <Line v-if="selectedChart === 'line'" :data="lineChartData" :options="modalLineChartOptions" />
+                    <h3>{{ selectedChart === 'pie' ? 'Resultados de inspección' : 'Inspecciones diarias' }}</h3>
+                    <Pie v-if="selectedChart === 'pie'" :data="pieChartData" :options="modalChartOptions.pie" />
+                    <Line v-if="selectedChart === 'line'" :data="lineChartData" :options="modalChartOptions.line" />
                 </div>
             </div>
         </div>
@@ -70,155 +70,52 @@
 </template>
 
 <script setup lang="ts">
-import { useBackendApi } from '../composables/useBackendApi'
-import { onMounted, ref, computed } from 'vue';
-import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement } from 'chart.js'
-import { Pie, Line } from 'vue-chartjs'
+import { onMounted, ref, onUnmounted } from 'vue';
+import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement } from 'chart.js';
+import { Pie, Line } from 'vue-chartjs';
+import { useAppStore } from '@/stores/useAppStore';
+import { useCharts } from '@/composables/useCharts';
 
-ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement)
+ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement);
 
-const items = ref<Item[]>([]);
+const store = useAppStore();
 const showModal = ref(false);
 const selectedChart = ref('');
 
 const {
-    fetchLogs,
-} = useBackendApi()
+    pieChartData,
+    lineChartData,
+    baseChartOptions,
+    lineChartOptions,
+    modalChartOptions
+} = useCharts(store.items);
 
-type Item = {
-    id: string;
-    expectedPart: string;
-    actualPart: string;
-    outcome: string;
-    image: string;
-    resultImage: string;
-    date: string;
-}
+onMounted(async () => {
+    await store.loadLogs();
+});
 
-const goodCount = computed(() => items.value.filter(item => item.outcome === 'GOOD').length)
-const noGoodCount = computed(() => items.value.filter(item => item.outcome === 'NOGOOD').length)
+// Force refresh data every minute
+let refreshInterval: number;
+onMounted(() => {
+    refreshInterval = window.setInterval(() => {
+        store.loadLogs(true);
+    }, 60000);
+});
 
-const pieChartData = computed(() => ({
-    labels: ['Pass', 'Fail'],
-    datasets: [{
-        data: [goodCount.value, noGoodCount.value],
-        backgroundColor: ['#4CAF50', '#f44336'],
-        borderColor: ['#388E3C', '#D32F2F'],
-        borderWidth: 1
-    }]
-}))
-
-const pieChartOptions = {
-    responsive: true,
-    maintainAspectRatio: true,
-    plugins: {
-        legend: {
-            position: 'bottom' as const,
-            labels: {
-                color: 'var(--text-100)'
-            },
-            marginbottom: '20px',
-        }
+onUnmounted(() => {
+    if (refreshInterval) {
+        clearInterval(refreshInterval);
     }
-}
-
-const modalPieChartOptions = {
-    ...pieChartOptions,
-    maintainAspectRatio: true
-}
-
-const lineChartData = computed(() => {
-    const last7Days = [...Array(7)].map((_, i) => {
-        const d = new Date()
-        d.setDate(d.getDate() - i)
-        return `${String(d.getDate()).padStart(2, '0')}-${String(d.getMonth() + 1).padStart(2, '0')}-${d.getFullYear()}`
-    }).reverse()
-
-    return {
-        labels: last7Days,
-        datasets: [{
-            label: 'Daily Inspections',
-            data: last7Days.map(date =>
-                items.value.filter(item => item.date.startsWith(date)).length
-            ),
-            borderColor: 'rgba(255, 255, 255, 0.5)',
-            backgroundColor: 'rgba(255, 255, 255, 1)',
-            tension: 0.1
-        }]
-    }
-})
-
-const lineChartOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    color: 'var(--text-100)',
-    scales: {
-        y: {
-            beginAtZero: true,
-            grid: {
-                color: 'rgba(255, 255, 255, 0.3)'
-            },
-            ticks: {
-                color: 'var(--text-100)',
-                font: {
-                    size: 12,
-                    family: 'Arial'
-                }
-            }
-        },
-        x: {
-            grid: {
-                color: 'rgba(255, 255, 255, 0.3)'
-            },
-            ticks: {
-                color: 'var(--text-100)',
-                font: {
-                    size: 12,
-                    family: 'Arial'
-                }
-            }
-        }
-    },
-    plugins: {
-        legend: {
-            labels: {
-                color: 'var(--text-100)',
-                font: {
-                    size: 12,
-                    family: 'Arial'
-                }
-            }
-        }
-    }
-}
-
-const modalLineChartOptions = {
-    ...lineChartOptions,
-    maintainAspectRatio: true
-}
+});
 
 const openModal = (chartType: string) => {
     selectedChart.value = chartType;
     showModal.value = true;
-}
+};
 
 const closeModal = () => {
     showModal.value = false;
-}
-
-onMounted(() => {
-    fetchLogs().then((response) => {
-        items.value = response.map((item: any): Item => ({
-            id: item.car_id,
-            expectedPart: item.expected_part,
-            actualPart: item.actual_part,
-            outcome: item.outcome,
-            image: item.original_image_path,
-            resultImage: item.result_image_path,
-            date: item.date
-        } as Item));
-    });
-})
+};
 </script>
 
 <style>

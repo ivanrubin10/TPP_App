@@ -1,25 +1,40 @@
 <template>
   <div class="content">
     <div class="connection-status" @click="handleRetryConnection">
-      <div class="status-circle" :class="{ 'connected': isConnected }"></div>
-      <span>{{ isConnected ? `${connectionType} Conectado` : `${connectionType} Desconectado` }}</span>
-      <svg class="reload-icon" :class="{ 'spinning': isRetrying }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <div class="status-circle" :class="{ 'connected': store.isConnected }"></div>
+      <span>{{ store.connectionType }} {{ store.isConnected ? 'Conectado' : 'Desconectado' }}</span>
+      <svg class="reload-icon" :class="{ 'spinning': store.isRetrying }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
       </svg>
     </div>
-    <div class="container" v-if="selectedItem">
+    
+    <div class="container" v-if="store.selectedItem">
       <div class="inspection-header">
-        <p>{{ selectedItem.id }}</p>
-        <p>{{ selectedItem.date }}</p>
+        <p>{{ store.selectedItem.id }}</p>
+        <p>{{ store.selectedItem.date }}</p>
       </div>
-      <InspectionResults v-model="selectedItem" />
+      <InspectionResults v-model="store.selectedItem" />
       <div class="inspection-footer">
-        <FalseOutcomeButton v-if="!selectedItem.resultImage" @click="handleClick" text="Detectar" />
-        <FalseOutcomeButton v-else @click="handleClick" text="Detectar nuevamente" />
-        <FalseOutcomeButton v-show="selectedItem.outcome === 'NOGOOD'" @click="noEsDefecto(selectedItem)"
-          text="No es defecto" />
-        <FalseOutcomeButton v-show="selectedItem.outcome === 'GOOD'" @click="esDefecto(selectedItem)"
-          text="Es defecto" />
+        <FalseOutcomeButton 
+          v-if="!store.selectedItem.resultImage" 
+          @click="handleInspectionClick" 
+          text="Detectar" 
+        />
+        <FalseOutcomeButton 
+          v-else 
+          @click="handleInspectionClick" 
+          text="Detectar nuevamente" 
+        />
+        <FalseOutcomeButton 
+          v-show="store.selectedItem.outcome === 'NOGOOD'" 
+          @click="handleNotDefect(store.selectedItem)"
+          text="No es defecto" 
+        />
+        <FalseOutcomeButton 
+          v-show="store.selectedItem.outcome === 'GOOD'" 
+          @click="handleIsDefect(store.selectedItem)"
+          text="Es defecto" 
+        />
       </div>
     </div>
     <div class="container" v-else>
@@ -27,387 +42,87 @@
         Por favor seleccione un coche de la lista para ver su estado
       </div>
     </div>
-    <CarsFooter :items="items" v-model="selectedItem" @item-clicked="handleItemClicked" />
+    
+    <CarsFooter 
+      :items="store.items" 
+      v-model="store.selectedItem" 
+      @item-clicked="handleItemClicked" 
+    />
   </div>
 </template>
 
+<script setup lang="ts">
+import { onMounted, onUnmounted } from 'vue';
+import { useAppStore } from '@/stores/useAppStore';
+import { useWebSocket } from '@/composables/useWebSocket';
+import { useInspection } from '@/composables/useInspection';
+import type { CarItem } from '@/types';
 
-<script lang="ts" setup>
-import { useBackendApi } from '../composables/useBackendApi'
-import CarsFooter from '../components/CarsFooter.vue'
-import FalseOutcomeButton from '../components/FalseOutcomeButton.vue'
-import InspectionResults from '../components/InspectionResults.vue'
-import { onBeforeUnmount, onMounted, ref } from 'vue';
-import socket from '../composables/socket';
-import axios from 'axios';
+import CarsFooter from '@/components/CarsFooter.vue';
+import FalseOutcomeButton from '@/components/FalseOutcomeButton.vue';
+import InspectionResults from '@/components/InspectionResults.vue';
 
-const baseUrl = 'http://localhost:5000'
+const store = useAppStore();
+const { handleInspection, isProcessing } = useInspection();
+const { emit } = useWebSocket();
 
-type Item = {
-  id: string;
-  expectedPart: string;
-  actualPart: string;
-  outcome: string;
-  image: string;
-  resultImage: string;
-  date: string;
-  isQueued: boolean;
-}
+// Load data immediately
+store.loadLogs();
 
-const items = ref<Item[]>([]);
-const isConnected = ref(false);
-const connectionType = ref('PLC');
-const messageBeingHandled = ref(false);
+// Declare refresh interval
+let refreshInterval: number;
 
-
-const selectedItem = ref();
-
-const { captureImage,
-  detectedObjects,
-  fetchLogs,
-  checkCarExists,
-  updateItem,
-  addLog,
-  retryConnection,
-  sendToICS,
-  getConfig } = useBackendApi()
-
-let clickHandle = false;
-
-const isRetrying = ref(false);
-
-const fetchQueuedCars = async () => {
-  try {
-    const response = await axios.get(`${baseUrl}/queued-cars`)
-    return response.data
-  } catch (error) {
-    console.error('Error fetching queued cars:', error)
-    throw error
-  }
-}
-
-const processQueuedCar = async (carId: string) => {
-  try {
-    const response = await axios.post(`${baseUrl}/process-queued-car/${carId}`)
-    return response.data
-  } catch (error) {
-    console.error('Error processing queued car:', error)
-    throw error
-  }
-}
-
-// Add a sorting function
-const sortItems = (items: Item[]) => {
-  return items.sort((a, b) => {
-    // First, prioritize queued (undetected) cars
-    if (a.isQueued && !b.isQueued) return -1;
-    if (!a.isQueued && b.isQueued) return 1;
-    
-    // Then sort by date (newest first)
-    const dateA = new Date(a.date.split(' ')[0].split('-').reverse().join('-'));
-    const dateB = new Date(b.date.split(' ')[0].split('-').reverse().join('-'));
-    return dateB.getTime() - dateA.getTime();
-  });
-};
-
-onMounted(async () => {
-  // Get initial config to set connection type
-  const config = await getConfig();
-  connectionType.value = config.connection_type;
-
-  socket.on('connection_status', (data: any) => {
-    isConnected.value = data.status;
-  });
-
-  socket.on('connection_type', (data: any) => {
-    connectionType.value = data.type;
-  });
-  
-  socket.on('plc_message', async (data: any) => {
-    console.log(`Received message from PLC:`, data.message);
-    await handleMessage(data, 'plc');
-  });
-
-  socket.on('handle_message', async (data: any) => {
-    if (messageBeingHandled.value) {
-      console.warn('Message handling is already in progress. Ignoring this message.');
-      return;
-    }
-    
-    messageBeingHandled.value = true;
-    try {
-      console.log(`Received message from GALC:`, data.message);
-      await handleMessage(data, 'galc').then(() => {
-        messageBeingHandled.value = false;
-      });
-    } catch (error) {
-      console.error('Error handling message:', error);
-    } finally {
-      messageBeingHandled.value = false; // Reset the flag after processing
-    }
-  });
-
-  // Listen for new queued cars from GALC
-  socket.on('new_queued_car', async (queuedCar: any) => {
-    console.log('Received new queued car:', queuedCar);
-    items.value.push({
-      id: queuedCar.car_id,
-      expectedPart: queuedCar.expected_part,
-      actualPart: '',
-      outcome: '',
-      image: '',
-      resultImage: '',
-      date: queuedCar.date,
-      isQueued: true
-    });
-    // Sort items whenever a new car is added
-    items.value = sortItems(items.value);
-  });
-
-  let isProcessing = false;
-
-  async function handleMessage(data: any, type: 'plc' | 'galc') {
-    if (isProcessing) {
-      console.warn('Message handling is already in progress. Ignoring this message.');
-      return;
-    }
-    
-    isProcessing = true;
-    try {
-      const currentDate = new Date();
-      const formattedDate = `${String(currentDate.getDate()).padStart(2, '0')}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${currentDate.getFullYear()} ${String(currentDate.getHours()).padStart(2, '0')}:${String(currentDate.getMinutes()).padStart(2, '0')}:${String(currentDate.getSeconds()).padStart(2, '0')}`;
-      
-      let expectedPart = '';
-      switch(data.message) {
-        case '01':
-          expectedPart = 'Capo tipo 1';
-          break;
-        case '05':
-          expectedPart = 'Capo tipo 2'; 
-          break;
-        case '08':
-          expectedPart = 'Capo tipo 3';
-          break;
-        default:
-          console.warn('Unknown message type:', data.message);
-          return;
-      }
-
-      // For PLC, process immediately. For GALC, this won't be called as we're using the queue system
-      if (type === 'plc') {
-        const newItem = {
-          car_id: Math.random().toString(36).slice(2, 8),
-          date: formattedDate,
-          expected_part: expectedPart,
-          actual_part: '',
-          original_image_path: '',
-          result_image_path: '',
-          outcome: ''
-        };
-
-        await addLog(newItem);
-
-        items.value.push({
-          id: newItem.car_id,
-          expectedPart: newItem.expected_part,
-          actualPart: newItem.actual_part,
-          outcome: newItem.outcome,
-          image: newItem.original_image_path,
-          resultImage: newItem.result_image_path,
-          date: newItem.date,
-          isQueued: false
-        });
-        
-        selectedItem.value = items.value[items.value.length - 1];
-        await handleClick();
-
-        socket.emit('plc_response', { message: expectedPart === selectedItem.value.actualPart ? 'GOOD' : 'NOGOOD' });
-      }
-    } finally {
-      isProcessing = false;
-    }
-  }
-
-  // Fetch both logs and queued cars
-  await Promise.all([
-    fetchLogs().then((response) => {
-      console.log('Fetched logs:', response);
-      response.forEach((item: any) => {
-        items.value.push({
-          id: item.car_id,
-          expectedPart: item.expected_part,
-          actualPart: item.actual_part,
-          outcome: item.outcome,
-          image: item.original_image_path,
-          resultImage: item.result_image_path,
-          date: item.date,
-          isQueued: false
-        });
-      });
-    }),
-    fetchQueuedCars().then((queuedCars) => {
-      console.log('Fetched queued cars:', queuedCars);
-      queuedCars.forEach((car: any) => {
-        items.value.push({
-          id: car.car_id,
-          expectedPart: car.expected_part,
-          actualPart: '',
-          outcome: '',
-          image: '',
-          resultImage: '',
-          date: car.date,
-          isQueued: true
-        });
-      });
-    })
-  ]);
-
-  // Sort all items after fetching
-  items.value = sortItems(items.value);
+onMounted(() => {
+  // Set up auto-refresh
+  refreshInterval = window.setInterval(() => {
+    store.loadLogs(true);
+  }, 30000);
 });
 
-onBeforeUnmount(() => {
-  socket.off('connection_status');
-  socket.off('connection_type');
-  socket.off('handle_message');
-  socket.off('new_queued_car');
+onUnmounted(() => {
+  if (refreshInterval) {
+    clearInterval(refreshInterval);
+  }
 });
 
-const handleItemClicked = async (item: any) => {
-  selectedItem.value = item;
-  
-  // If it's a queued car, just mark it as selected but don't process automatically
-  if (item.isQueued) {
-    // Only update the UI to show it's selected
-    return;
-  }
+const handleItemClicked = async (item: CarItem) => {
+  store.setSelectedItem(item);
 };
 
-const handleClick = async () => {
-  if (clickHandle) {
-    return;
-  }
-
-  clickHandle = true;
+const handleInspectionClick = async () => {
+  if (!store.selectedItem || isProcessing.value) return;
+  
   try {
-    // Prepare car parameters for ICS if using GALC
-    const carParams = connectionType.value === 'GALC' ? {
-      car_id: selectedItem.value.id,
-      expected_part: selectedItem.value.expectedPart,
-      actual_part: selectedItem.value.actualPart
-    } : undefined;
-    
-    const data = await captureImage(carParams);
-    console.log('Captured data:', data);
-
-    const currentDate = new Date();
-    selectedItem.value.date = `${currentDate.getDate()}-${currentDate.getMonth() + 1}-${currentDate.getFullYear()} ${currentDate.getHours()}:${currentDate.getMinutes()}:${currentDate.getSeconds()}`;
-    selectedItem.value.image = data.image;
-    detectedObjects.value = data.objects;
-    selectedItem.value.resultImage = data.resultImage;
-
-    if (data.objects.length === 0) {
-      selectedItem.value.actualPart = "Capo tipo 1";
-    } else if (data.objects.length === 2) {
-      selectedItem.value.actualPart = "Capo tipo 2";
-    } else if (data.objects.length === 3) {
-      selectedItem.value.actualPart = "Capo tipo 3";
-    } else {
-      selectedItem.value.actualPart = "";
-    }
-    console.log("actualPart: ", selectedItem.value.actualPart);
-
-    if (selectedItem.value.actualPart === selectedItem.value.expectedPart) {
-      selectedItem.value.outcome = "GOOD";
-    } else {
-      selectedItem.value.outcome = "NOGOOD";
-      console.log(connectionType.value); 
-      // If GALC and NOGOOD, send to ICS
-      if (connectionType.value === 'GALC') {
-        console.log("Sending to ICS");
-        try {
-          await sendToICS({
-            car_id: selectedItem.value.id,
-            expected_part: selectedItem.value.expectedPart,
-            actual_part: selectedItem.value.actualPart,
-            image: data.resultImage
-          });
-        } catch (error) {
-          console.error('Error sending to ICS:', error);
-        }
+    const updatedItem = await handleInspection(store.selectedItem);
+    if (updatedItem) {
+      // Send response to PLC if needed
+      if (store.connectionType === 'PLC') {
+        emit('plc_response', { 
+          message: updatedItem.actualPart === updatedItem.expectedPart ? 'GOOD' : 'NOGOOD' 
+        });
       }
     }
-    const carId = selectedItem.value.id;
-
-    // Check if the car exists in the database
-    const carExists = await checkCarExists(carId);
-
-    if (carExists.exists) {
-      // Update the existing log with new images and status
-      const itemToUpdate = {
-        id: carExists.car_log.id,
-        car_id: carId,
-        date: selectedItem.value.date,
-        expected_part: selectedItem.value.expectedPart,
-        actual_part: selectedItem.value.actualPart,
-        original_image_path: data.image,
-        result_image_path: data.resultImage,
-        outcome: selectedItem.value.outcome,
-      };
-      await updateItem(itemToUpdate);
-    } else {
-      // Add a new log with captured images and status
-      const newLog = {
-        car_id: carId,
-        date: selectedItem.value.date,
-        expected_part: selectedItem.value.expectedPart,
-        actual_part: selectedItem.value.actualPart,
-        original_image_path: data.image,
-        result_image_path: data.resultImage,
-        outcome: selectedItem.value.outcome,
-      };
-      await addLog(newLog);
-    }
-
-    // If this was a queued car that was just processed, mark it as processed
-    if (selectedItem.value.isQueued) {
-      await processQueuedCar(carId);
-      selectedItem.value.isQueued = false;
-    }
-
   } catch (error) {
-    console.error('Error capturing data:', error);
-    if (connectionType.value === 'GALC') {
-      // ElNotification({
-      //   title: 'Error',
-      //   message: 'Error al procesar la detección',
-      //   type: 'error',
-      //   duration: 3000
-      // });
-    }
+    console.error('Error during inspection:', error);
   }
-
-  clickHandle = false;
 };
-
-function esDefecto(item: any) {
-  console.log("es defecto", item);
-}
-function noEsDefecto(item: any) {
-  console.log("no es defecto", item);
-}
 
 const handleRetryConnection = async () => {
-  if (isRetrying.value) return;
-  
-  isRetrying.value = true;
+  if (store.isRetrying) return;
+  store.setRetrying(true);
   try {
-    await retryConnection();
-  } catch (error) {
-    console.error('Error retrying connection:', error);
+    await store.retryConnection();
   } finally {
-    isRetrying.value = false;
+    store.setRetrying(false);
   }
+};
+
+const handleIsDefect = (item: CarItem) => {
+  console.log("es defecto", item);
+};
+
+const handleNotDefect = (item: CarItem) => {
+  console.log("no es defecto", item);
 };
 </script>
 
@@ -426,6 +141,7 @@ const handleRetryConnection = async () => {
   padding: 10px 70px;
   color: var(--text-100);
   z-index: 1000;
+  cursor: pointer;
 }
 
 .status-circle {
@@ -441,13 +157,8 @@ const handleRetryConnection = async () => {
   background-color: var(--good-100);
 }
 
-.connection-status {
-  cursor: pointer
-}
-
 .container {
   overflow-y: auto;
-  /* Enable vertical scrolling */
   background-color: var(--bg-100);
   padding: 0 15em;
   padding-top: 20px;
@@ -493,33 +204,6 @@ const handleRetryConnection = async () => {
   font-size: 1.4em;
 }
 
-@media (min-width: 1024px) {
-  header {
-    display: flex;
-    place-items: center;
-    padding-right: calc(var(--section-gap) / 2);
-  }
-
-  .logo {
-    margin: 0 2rem 0 0;
-  }
-
-  header .wrapper {
-    display: flex;
-    place-items: flex-start;
-    flex-wrap: wrap;
-  }
-
-  nav {
-    text-align: left;
-    margin-left: -1rem;
-    font-size: 1rem;
-
-    padding: 1rem 0;
-    margin-top: 1rem;
-  }
-}
-
 .reload-icon {
   margin-left: 10px;
   width: 20px;
@@ -534,12 +218,8 @@ const handleRetryConnection = async () => {
 }
 
 @keyframes spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .connection-status:hover .reload-icon:not(.spinning) {

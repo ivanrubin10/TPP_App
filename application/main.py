@@ -50,6 +50,7 @@ class CarLogSchema(SQLAlchemySchema):
     class Meta:
         model = CarLog
         load_instance = True
+        include_relationships = True
 
     id = auto_field()
     car_id = auto_field()
@@ -64,6 +65,7 @@ class QueuedCarSchema(SQLAlchemySchema):
     class Meta:
         model = QueuedCar
         load_instance = True
+        include_relationships = True
 
     id = auto_field()
     car_id = auto_field()
@@ -451,9 +453,16 @@ def add_log():
 
 @app.route('/logs', methods=['GET'])
 def get_logs():
-    all_logs = CarLog.query.all()
-    result = car_logs_schema.dump(all_logs)
-    return jsonify(result)
+    try:
+        all_logs = CarLog.query.all()
+        result = car_logs_schema.dump(all_logs)
+        print(f"Fetched {len(result)} logs")
+        for log in result:
+            print(f"  - Log: Car ID: {log['car_id']}, Expected: {log['expected_part']}, Actual: {log['actual_part']}, Outcome: {log['outcome']}")
+        return jsonify(result)
+    except Exception as e:
+        print("Error fetching logs:", e)
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/config', methods=['GET', 'POST'])
 def handle_config():
@@ -489,8 +498,17 @@ def handle_config():
 # Add new endpoint to get queued cars
 @app.route('/queued-cars', methods=['GET'])
 def get_queued_cars():
-    queued_cars = QueuedCar.query.filter_by(is_processed=False).all()
-    return jsonify(queued_cars_schema.dump(queued_cars))
+    try:
+        # Get only unprocessed queued cars
+        queued_cars = QueuedCar.query.filter_by(is_processed=False).all()
+        result = queued_cars_schema.dump(queued_cars)
+        print(f"Fetched {len(result)} queued cars")
+        for car in result:
+            print(f"  - Car ID: {car['car_id']}, Expected Part: {car['expected_part']}, Date: {car['date']}")
+        return jsonify(result)
+    except Exception as e:
+        print("Error fetching queued cars:", e)
+        return jsonify({'error': str(e)}), 500
 
 # Add endpoint to mark a queued car as processed
 @app.route('/process-queued-car/<car_id>', methods=['POST'])
