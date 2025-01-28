@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  app:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "5000:5000"  # Backend
+      - "8080:8080"  # Frontend
+    volumes:
+      - ./application:/app/application  # For backend code
+      - ./application-ui/src:/app/application-ui/src  # For frontend source
+      - ./scripts:/app/scripts  # For scripts
+      - ./config:/app/config  # For config
+    environment:
+      - NODE_ENV=production
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
+    restart: unless-stopped
+    init: true  # Proper process management 
