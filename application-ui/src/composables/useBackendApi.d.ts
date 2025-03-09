@@ -9,6 +9,7 @@ interface BackendApi {
     gray_percentage?: number;
     processing_time?: number;
     skip_database_update?: boolean;
+    is_capo_tipo_1?: boolean;
   }>;
   capturedImage: Ref<string>;
   detectedObjects: Ref<any[]>;

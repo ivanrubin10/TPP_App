@@ -390,11 +390,12 @@ const handleClick = async () => {
         console.log('False positive detected: incompatible object combination');
       } else if (detectedClasses.length === 0) {
         // No objects detected
-        if (data.gray_percentage !== undefined && data.gray_percentage >= 60) {
+        if (data.gray_percentage !== undefined && data.gray_percentage >= 60 || data.is_capo_tipo_1) {
           // When gray percentage is greater than 60 and nothing is detected, it's Capo tipo 1
+          // Or when the backend explicitly tells us it's a Capo tipo 1
           selectedItem.value.actualPart = "Capo tipo 1";
           selectedItem.value.outcome = selectedItem.value.expectedPart === "Capo tipo 1" ? "GOOD" : "NOGOOD";
-          console.log('No objects detected but gray percentage >= 60%, classifying as Capo tipo 1');
+          console.log('No objects detected but identified as Capo tipo 1');
         } else {
           // Otherwise, no capo detected
           selectedItem.value.actualPart = "No hay capo";

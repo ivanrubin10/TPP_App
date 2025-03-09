@@ -21,7 +21,7 @@ def load_tflite_model(model_path):
     print(f"Model loaded and tensors allocated in {time.time() - start_time:.2f} seconds")
     return interpreter
 
-def tflite_detect_image(interpreter, base64_image, labels, min_conf=0.5):
+def tflite_detect_image(interpreter, base64_image, labels, min_conf=0.5, early_exit=False):
     """
     Runs TFLite model on the given base64 encoded image and returns the image with detection results encoded as base64,
     along with a list of detected objects.
@@ -31,6 +31,7 @@ def tflite_detect_image(interpreter, base64_image, labels, min_conf=0.5):
     - base64_image: The input image as a base64 encoded string.
     - labels: List of labels corresponding to the model's classes.
     - min_conf: Minimum confidence threshold for displaying detected objects.
+    - early_exit: If True, will exit early after checking a few detections (for high gray % images)
 
     Returns:
     - encoded_image: The resulting image with detection results as a base64 encoded string.
@@ -105,6 +106,19 @@ def tflite_detect_image(interpreter, base64_image, labels, min_conf=0.5):
     
     # Only process detections above threshold
     valid_indices = np.where(scores > min_conf)[0]
+    
+    # For early exit (high gray % images), just check if there are any valid detections
+    # and return quickly without drawing bounding boxes
+    if early_exit:
+        if len(valid_indices) == 0:
+            print("Early exit: No objects detected above threshold")
+            # Return original image and empty objects list
+            _, buffer = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            encoded_image = base64.b64encode(buffer).decode('utf-8')
+            
+            end_time = time.time()
+            print(f"Early exit total time: {(end_time - start_time) * 1000:.2f}ms")
+            return encoded_image, []
     
     for i in valid_indices:
         if scores[i] <= 1.0:  # Ensure score is valid

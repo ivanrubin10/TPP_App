@@ -38,7 +38,8 @@ export function useBackendApi() {
         gray_percentage: data.gray_percentage,
         error: data.error,
         processing_time: data.processing_time,
-        skip_database_update: data.skip_database_update
+        skip_database_update: data.skip_database_update,
+        is_capo_tipo_1: data.is_capo_tipo_1
       }
     } catch (error) {
       console.error('Error capturing image:', error);

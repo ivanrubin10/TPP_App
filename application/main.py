@@ -518,6 +518,23 @@ def capture_and_detect():
                     'gray_percentage': float(gray_percentage),
                     'skip_database_update': True  # Flag to indicate frontend should not update database
                 })
+            
+            # If gray percentage is high (>= 60%) and expected_part is 'Capo tipo 1',
+            # we can skip the TFLite detection since we know it's a Capo tipo 1
+            if expected_part == 'Capo tipo 1' and gray_percentage >= 60:
+                print("High gray percentage detected and expected part is Capo tipo 1. Skipping TFLite detection.")
+                return jsonify({
+                    'image': image,  # Original image
+                    'objects': [],  # No objects detected
+                    'result_image': image,  # Use original image as result image
+                    'gray_percentage': float(gray_percentage),
+                    'processing_time': time.time() - start_time,
+                    'is_capo_tipo_1': True  # Flag to indicate this is a Capo tipo 1
+                })
+                
+            # For all other cases with high gray percentage, we'll add a flag to indicate
+            # this might be a Capo tipo 1 but still run detection to confirm
+            high_gray_percentage = gray_percentage >= 60
         except Exception as e:
             print(f"Error during gray detection: {str(e)}")
             print(f"Error type: {type(e)}")
@@ -536,14 +553,41 @@ def capture_and_detect():
         try:
             # Time the object detection process
             detection_start = time.time()
-            result_image, detected_objects = tflite_detect_image(
-                interpreter,  # Use the cached interpreter
-                image, 
-                labels, 
-                config.get('min_conf_threshold', 0.5)
-            )
+            
+            # If we have high gray percentage, we might be able to skip full detection
+            # and just do a quick check for objects
+            if high_gray_percentage:
+                # Use a higher confidence threshold for faster detection
+                higher_threshold = max(0.7, config.get('min_conf_threshold', 0.5))
+                print(f"Using higher confidence threshold ({higher_threshold}) for high gray percentage image")
+                result_image, detected_objects = tflite_detect_image(
+                    interpreter,
+                    image,
+                    labels,
+                    higher_threshold,
+                    early_exit=True  # Use early exit for high gray percentage images
+                )
+            else:
+                # Normal detection for other cases
+                result_image, detected_objects = tflite_detect_image(
+                    interpreter,
+                    image,
+                    labels,
+                    config.get('min_conf_threshold', 0.5),
+                    early_exit=False
+                )
+                
             detection_time = time.time() - detection_start
             print(f"Object detection completed in {detection_time:.2f} seconds. Found {len(detected_objects)} objects")
+            
+            # If we have high gray percentage and no objects were detected,
+            # this is likely a Capo tipo 1
+            if high_gray_percentage and len(detected_objects) == 0:
+                print("High gray percentage and no objects detected: likely Capo tipo 1")
+                is_capo_tipo_1 = True
+            else:
+                is_capo_tipo_1 = False
+                
         except Exception as e:
             print(f"Error during object detection: {str(e)}")
             print(f"Error type: {type(e)}")
@@ -557,7 +601,8 @@ def capture_and_detect():
             'objects': detected_objects, 
             'result_image': result_image,
             'gray_percentage': float(gray_percentage),  # Ensure it's a float
-            'processing_time': time.time() - start_time  # Add processing time for debugging
+            'processing_time': time.time() - start_time,  # Add processing time for debugging
+            'is_capo_tipo_1': is_capo_tipo_1  # Add flag for Capo tipo 1
         }
         
         # Log response data without the images
