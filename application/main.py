@@ -13,8 +13,6 @@ from dataclasses import dataclass
 from ics_integration import ICSIntegration
 import os
 from detect_gray import detect_gray_percentage
-import hashlib
-from functools import lru_cache
 
 
 app = Flask(__name__, static_folder='../application-ui', static_url_path='/')
@@ -37,38 +35,6 @@ model_cache = {
     'labels': None,
     'last_loaded': 0
 }
-
-# Add a detection result cache
-# This will store recent detection results to avoid redundant processing
-detection_cache = {}
-CACHE_TIMEOUT = 60  # Cache results for 60 seconds
-MAX_CACHE_SIZE = 50  # Maximum number of entries in the cache
-
-def clean_cache():
-    """Remove old entries from the detection cache to prevent memory leaks"""
-    global detection_cache
-    current_time = time.time()
-    # Find expired entries
-    expired_keys = [
-        key for key, entry in detection_cache.items() 
-        if current_time - entry['timestamp'] > CACHE_TIMEOUT
-    ]
-    # Remove expired entries
-    for key in expired_keys:
-        del detection_cache[key]
-        
-    # If cache is still too large, remove oldest entries
-    if len(detection_cache) > MAX_CACHE_SIZE:
-        # Sort by timestamp (oldest first)
-        sorted_entries = sorted(
-            detection_cache.items(), 
-            key=lambda x: x[1]['timestamp']
-        )
-        # Remove oldest entries until we're under the limit
-        for key, _ in sorted_entries[:len(detection_cache) - MAX_CACHE_SIZE]:
-            del detection_cache[key]
-    
-    print(f"Cache cleaned: {len(expired_keys)} expired entries removed, {len(detection_cache)} entries remaining")
 
 # Function to get or load the model and labels
 def get_model_and_labels():
@@ -508,28 +474,12 @@ def handle_retry_connection():
 def capture_and_detect():
     global config, capturing
     
-    # Clean the cache to remove old entries
-    clean_cache()
-    
     # Validate input parameters if they exist
     car_id = request.args.get('car_id')
     expected_part = request.args.get('expected_part')
     actual_part = request.args.get('actual_part')
-    reuse_previous = request.args.get('reuse_previous', 'false').lower() == 'true'
     
-    print(f"Capture request received with params: car_id={car_id}, expected_part={expected_part}, actual_part={actual_part}, reuse_previous={reuse_previous}")
-    
-    # Check if we should reuse the previous detection result for this car_id
-    if reuse_previous and car_id and car_id in detection_cache:
-        cache_entry = detection_cache[car_id]
-        cache_age = time.time() - cache_entry['timestamp']
-        
-        # Only use cache if it's fresh (less than CACHE_TIMEOUT seconds old)
-        if cache_age < CACHE_TIMEOUT:
-            print(f"Using cached detection result for car_id {car_id}, cache age: {cache_age:.2f} seconds")
-            return jsonify(cache_entry['result'])
-        else:
-            print(f"Cached result for car_id {car_id} is too old ({cache_age:.2f} seconds), performing new detection")
+    print(f"Capture request received with params: car_id={car_id}, expected_part={expected_part}, actual_part={actual_part}")
     
     # Check if we have partial parameters
     if any([car_id, expected_part, actual_part]) and not all([car_id, expected_part]):
@@ -574,13 +524,6 @@ def capture_and_detect():
                     'skip_database_update': True  # Flag to indicate frontend should not update database
                 }
                 
-                # Cache the result if we have a car_id
-                if car_id:
-                    detection_cache[car_id] = {
-                        'timestamp': time.time(),
-                        'result': result
-                    }
-                
                 return jsonify(result)
             
             # If gray percentage is high (>= 60%) and expected_part is 'Capo tipo 1',
@@ -595,13 +538,6 @@ def capture_and_detect():
                     'processing_time': time.time() - start_time,
                     'is_capo_tipo_1': True  # Flag to indicate this is a Capo tipo 1
                 }
-                
-                # Cache the result if we have a car_id
-                if car_id:
-                    detection_cache[car_id] = {
-                        'timestamp': time.time(),
-                        'result': result
-                    }
                 
                 return jsonify(result)
                 
@@ -649,13 +585,6 @@ def capture_and_detect():
             # If high gray percentage but no objects detected, this is likely a Capo tipo 1
             if high_gray_percentage and len(objects) == 0:
                 result['is_capo_tipo_1'] = True
-            
-            # Cache the result if we have a car_id
-            if car_id:
-                detection_cache[car_id] = {
-                    'timestamp': time.time(),
-                    'result': result
-                }
             
             return jsonify(result)
         except Exception as e:

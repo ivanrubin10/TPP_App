@@ -9,7 +9,7 @@ export function useBackendApi() {
   const resultImage = ref('')
   const logs = ref([])
 
-   const captureImage = async (carParams, reusePrevious = false) => {
+   const captureImage = async (carParams) => {
     try {
       let url = `${baseUrl}/capture-image`
       
@@ -17,12 +17,6 @@ export function useBackendApi() {
       if (carParams && carParams.car_id) {
         console.log('Adding car parameters to capture request:', carParams);
         url += `?car_id=${encodeURIComponent(carParams.car_id)}&expected_part=${encodeURIComponent(carParams.expected_part)}&actual_part=${encodeURIComponent(carParams.actual_part || '')}`
-        
-        // Add reuse_previous parameter if requested
-        if (reusePrevious) {
-          url += `&reuse_previous=true`
-          console.log('Requesting to reuse previous detection results if available');
-        }
       }
       
       console.log('Sending capture request to:', url);

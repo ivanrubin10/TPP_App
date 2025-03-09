@@ -82,7 +82,7 @@ const messageBeingHandled = ref(false);
 const selectedItem = ref();
 
 const { 
-  captureImage: originalCaptureImage,
+  captureImage,
   detectedObjects,
   fetchLogs,
   checkCarExists,
@@ -91,12 +91,6 @@ const {
   retryConnection,
   sendToICS,
   getConfig } = useBackendApi()
-
-// Create a wrapper function that accepts the reusePrevious parameter
-const captureImage = async (carParams: any, reusePrevious = false) => {
-  // @ts-ignore - The original function can accept two parameters even if TypeScript doesn't know it
-  return originalCaptureImage(carParams, reusePrevious);
-};
 
 let clickHandle = false;
 
@@ -310,12 +304,6 @@ const handleClick = async () => {
   }, 5000); // 5 seconds
   
   try {
-    // Check if this is a repeated detection on the same item
-    const isRepeatedDetection = selectedItem.value && 
-                               !selectedItem.value.isQueued && 
-                               selectedItem.value.image && 
-                               selectedItem.value.resultImage;
-    
     // Check if the selected item is a queued car and process it first
     if (selectedItem.value && selectedItem.value.isQueued) {
       loadingMessage.value = 'Procesando coche en cola...';
@@ -350,7 +338,7 @@ const handleClick = async () => {
     // Capture the image and get detection results
     loadingMessage.value = 'Capturando imagen y detectando objetos...';
     const captureStartTime = performance.now();
-    const data = await captureImage(carParams, isRepeatedDetection);
+    const data = await captureImage(carParams);
     const captureEndTime = performance.now();
     console.log(`Total capture and detection time: ${(captureEndTime - captureStartTime).toFixed(2)}ms`);
     console.log('Raw response from capture:', data);
