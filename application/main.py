@@ -534,13 +534,16 @@ def capture_and_detect():
 
         print(f"Using confidence threshold: {config.get('min_conf_threshold', 0.5)}")
         try:
+            # Time the object detection process
+            detection_start = time.time()
             result_image, detected_objects = tflite_detect_image(
                 interpreter,  # Use the cached interpreter
                 image, 
                 labels, 
                 config.get('min_conf_threshold', 0.5)
             )
-            print(f"Objects detected successfully! Found {len(detected_objects)} objects")
+            detection_time = time.time() - detection_start
+            print(f"Object detection completed in {detection_time:.2f} seconds. Found {len(detected_objects)} objects")
         except Exception as e:
             print(f"Error during object detection: {str(e)}")
             print(f"Error type: {type(e)}")
@@ -556,6 +559,14 @@ def capture_and_detect():
             'gray_percentage': float(gray_percentage),  # Ensure it's a float
             'processing_time': time.time() - start_time  # Add processing time for debugging
         }
+        
+        # Log response data without the images
+        log_response = {
+            'objects': detected_objects,
+            'gray_percentage': float(gray_percentage),
+            'processing_time': time.time() - start_time
+        }
+        print(f"Detection results: {log_response}")
         
         # If this is a queued car and the result will be NG, send to ICS
         if car_id and expected_part and actual_part:
@@ -612,7 +623,9 @@ def update_item():
     try:
         print("Received request to update item")
         data = request.get_json()
-        print(f"Request data: {data}")
+        # Create a copy of data without the image paths for logging
+        log_data = {k: v for k, v in data.items() if k not in ['original_image_path', 'result_image_path']}
+        print(f"Request data (excluding images): {log_data}")
         
         # Validate required fields
         required_fields = ['car_id', 'expected_part', 'actual_part', 'original_image_path', 'result_image_path', 'outcome']
@@ -669,7 +682,9 @@ def add_log():
     try:
         print("Received request to add log")
         data = request.get_json()
-        print(f"Request data: {data}")
+        # Create a copy of data without the image paths for logging
+        log_data = {k: v for k, v in data.items() if k not in ['original_image_path', 'result_image_path']}
+        print(f"Request data (excluding images): {log_data}")
         
         # Validate required fields
         required_fields = ['car_id', 'date', 'expected_part', 'actual_part', 'original_image_path', 'result_image_path', 'outcome']
@@ -803,20 +818,29 @@ def send_to_ics():
         car_id = data['car_id']
         expected_part = data['expected_part']
         actual_part = data['actual_part']
+        # Don't log the image_base64 content
+        print(f"Sending to ICS - car_id: {car_id}, expected_part: {expected_part}, actual_part: {actual_part}")
         image_base64 = data['image']
 
         # Get VIN and send to ICS
         vin = ics.request_vin(car_id)
         if vin:
-            ics.send_defect_data(
+            print(f"Retrieved VIN for car_id {car_id}: {vin}")
+            result = ics.send_defect_data(
                 vin=vin,
                 image_base64=image_base64,
                 expected_part=expected_part,
                 actual_part=actual_part
             )
+            if result:
+                print(f"Successfully sent defect data to ICS for car_id: {car_id}")
+            else:
+                print(f"Failed to send defect data to ICS for car_id: {car_id}")
             return jsonify({'message': 'Sent to ICS successfully'}), 200
+        print(f"Could not get VIN for car_id: {car_id}")
         return jsonify({'error': 'Could not get VIN'}), 400
     except Exception as e:
+        print(f"Error in send_to_ics: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':

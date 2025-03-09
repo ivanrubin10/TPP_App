@@ -390,8 +390,17 @@ const handleClick = async () => {
         console.log('False positive detected: incompatible object combination');
       } else if (detectedClasses.length === 0) {
         // No objects detected
-        selectedItem.value.actualPart = "No hay capo";
-        selectedItem.value.outcome = "NOGOOD";
+        if (data.gray_percentage !== undefined && data.gray_percentage >= 60) {
+          // When gray percentage is greater than 60 and nothing is detected, it's Capo tipo 1
+          selectedItem.value.actualPart = "Capo tipo 1";
+          selectedItem.value.outcome = selectedItem.value.expectedPart === "Capo tipo 1" ? "GOOD" : "NOGOOD";
+          console.log('No objects detected but gray percentage >= 60%, classifying as Capo tipo 1');
+        } else {
+          // Otherwise, no capo detected
+          selectedItem.value.actualPart = "No hay capo";
+          selectedItem.value.outcome = "NOGOOD";
+          console.log('No objects detected and low gray percentage, classifying as No hay capo');
+        }
       } else if (hasGrande || hasMediano || hasChico) {
         // Capo tipo 3 - has any of grande, mediano, or chico
         selectedItem.value.actualPart = "Capo tipo 3";
