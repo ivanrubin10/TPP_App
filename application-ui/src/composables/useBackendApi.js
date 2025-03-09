@@ -74,11 +74,29 @@ export function useBackendApi() {
 
   const updateItem = async (item) => {
     try {
-      const response = await axios.put(`${baseUrl}/update-item`, item)
-      return response.data
+      console.log('Starting update item request...');
+      const startTime = performance.now();
+      
+      // Set a longer timeout for large image updates
+      const timeout = item.skip_image_update ? 10000 : 30000; // 10s for non-image updates, 30s for image updates
+      
+      const response = await axios.put(`${baseUrl}/update-item`, item, {
+        timeout: timeout,
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      const endTime = performance.now();
+      console.log(`Update item request completed in ${(endTime - startTime).toFixed(2)}ms`);
+      
+      return response.data;
     } catch (error) {
-      console.error('Error updating item:', error)
-      throw error
+      console.error('Error updating item:', error);
+      if (error.code === 'ECONNABORTED') {
+        console.error('Request timed out. This might be due to large image data.');
+      }
+      throw error;
     }
   }
 

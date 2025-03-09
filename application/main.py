@@ -85,6 +85,11 @@ class CarLog(db.Model):
     original_image_path = db.Column(db.String(200), nullable=False)
     result_image_path = db.Column(db.String(200), nullable=False)
     outcome = db.Column(db.String(200), nullable=False)
+    
+    # Add index for faster lookups
+    __table_args__ = (
+        db.Index('idx_car_id', 'car_id'),
+    )
 
 # Define QueuedCar model for GALC cars waiting to be processed
 class QueuedCar(db.Model):
@@ -665,6 +670,7 @@ def check_car(car_id):
 
 @app.route('/update-item', methods=['PUT'])
 def update_item():
+    start_time = time.time()
     try:
         print("Received request to update item")
         data = request.get_json()
@@ -672,27 +678,53 @@ def update_item():
         log_data = {k: v for k, v in data.items() if k not in ['original_image_path', 'result_image_path']}
         print(f"Request data (excluding images): {log_data}")
         
+        # Check if we should skip image updates
+        skip_image_update = data.get('skip_image_update', False)
+        if skip_image_update:
+            print("Image update will be skipped based on request parameter")
+        
         # Validate required fields
-        required_fields = ['car_id', 'expected_part', 'actual_part', 'original_image_path', 'result_image_path', 'outcome']
+        required_fields = ['car_id', 'expected_part', 'actual_part', 'outcome']
+        # Only require image paths if not skipping image update
+        if not skip_image_update:
+            required_fields.extend(['original_image_path', 'result_image_path'])
+            
         for field in required_fields:
             if field not in data or data[field] is None:
                 error_msg = f"Missing required field: {field}"
                 print(error_msg)
                 return jsonify({'error': error_msg}), 400
         
+        query_start = time.time()
         print(f"Looking for car with ID: {data['car_id']}")
         car_log = CarLog.query.filter_by(car_id=data['car_id']).first()
+        query_time = time.time() - query_start
+        print(f"Database query completed in {query_time:.2f} seconds")
+        
         if car_log:
             print(f"Found car with ID: {car_log.id}, updating fields")
+            update_start = time.time()
+            
+            # Always update these fields
             car_log.expected_part = data['expected_part']
             car_log.actual_part = data['actual_part']
-            car_log.original_image_path = data['original_image_path']
-            car_log.result_image_path = data['result_image_path']
             car_log.outcome = data['outcome']
             
+            # Only update image paths if not skipping
+            if not skip_image_update and 'original_image_path' in data and 'result_image_path' in data:
+                print("Updating image paths")
+                car_log.original_image_path = data['original_image_path']
+                car_log.result_image_path = data['result_image_path']
+            else:
+                print("Skipping image path updates")
+            
             try:
+                commit_start = time.time()
                 db.session.commit()
-                print(f"Successfully updated car with ID: {car_log.id}")
+                commit_time = time.time() - commit_start
+                print(f"Database commit completed in {commit_time:.2f} seconds")
+                update_time = time.time() - update_start
+                print(f"Update operation completed in {update_time:.2f} seconds")
             except Exception as e:
                 db.session.rollback()
                 error_msg = f"Database error during commit: {str(e)}"
@@ -706,10 +738,16 @@ def update_item():
                 'date': car_log.date,
                 'expected_part': car_log.expected_part,
                 'actual_part': car_log.actual_part,
-                'original_image_path': car_log.original_image_path,
-                'result_image_path': car_log.result_image_path,
                 'outcome': car_log.outcome,
             }
+            
+            # Only include image paths in response if they were updated
+            if not skip_image_update:
+                updated_log['original_image_path'] = car_log.original_image_path
+                updated_log['result_image_path'] = car_log.result_image_path
+                
+            total_time = time.time() - start_time
+            print(f"Total update_item request completed in {total_time:.2f} seconds")
             return jsonify(updated_log)
         else:
             error_msg = f"Car log not found for car_id: {data['car_id']}"

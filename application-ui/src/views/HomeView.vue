@@ -451,17 +451,35 @@ const handleClick = async () => {
         
         if (exists) {
           console.log('Updating existing car record');
-          // Update existing log
-          const updateData = {
+          
+          // Check if images have changed by comparing with the existing record
+          const imagesChanged = 
+            selectedItem.value.image !== existsResponse.car_log.original_image_path ||
+            selectedItem.value.resultImage !== existsResponse.car_log.result_image_path;
+          
+          // Create update data with or without images based on whether they've changed
+          const updateData: any = {
             car_id: selectedItem.value.id,
             expected_part: selectedItem.value.expectedPart,
             actual_part: selectedItem.value.actualPart,
             outcome: selectedItem.value.outcome,
-            original_image_path: selectedItem.value.image,
-            result_image_path: selectedItem.value.resultImage
+            skip_image_update: !imagesChanged
           };
+          
+          // Only include image paths if they've changed
+          if (imagesChanged) {
+            updateData.original_image_path = selectedItem.value.image;
+            updateData.result_image_path = selectedItem.value.resultImage;
+            console.log('Images have changed, including in update');
+          } else {
+            console.log('Images have not changed, skipping image update');
+          }
+          
           console.log('Update data:', updateData);
+          const updateStartTime = performance.now();
           const updateResponse = await updateItem(updateData);
+          const updateEndTime = performance.now();
+          console.log(`Update completed in ${(updateEndTime - updateStartTime).toFixed(2)}ms`);
           console.log('Update response:', updateResponse);
         } else {
           console.log('Adding new car record');
