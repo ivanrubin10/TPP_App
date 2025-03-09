@@ -26,7 +26,9 @@ export function useBackendApi() {
       return {
         image: `data:image/jpeg;base64,${data.image}`,
         objects: data.objects,
-        resultImage: `data:image/jpeg;base64,${data.result_image}`
+        resultImage: `data:image/jpeg;base64,${data.result_image}`,
+        gray_percentage: data.gray_percentage,
+        error: data.error
       }
     } catch (error) {
       console.error('Error capturing image:', error)

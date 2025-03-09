@@ -11,6 +11,8 @@ from flask_marshmallow import Marshmallow
 from marshmallow_sqlalchemy import SQLAlchemySchema, auto_field
 from dataclasses import dataclass
 from ics_integration import ICSIntegration
+import os
+from detect_gray import detect_gray_percentage
 
 
 app = Flask(__name__, static_folder='../application-ui', static_url_path='/')
@@ -106,6 +108,9 @@ galc_connection = None
 plc_connection = None
 
 message_processing = False
+
+# Initialize capturing flag
+capturing = False
 
 # Added GALC response handling and connection logic
 def handle_galc_response(conn):
@@ -330,29 +335,95 @@ def handle_retry_connection():
 def capture_and_detect():
     global config, capturing
     
+    if capturing:
+        print("Another capture is in progress, returning 429")
+        return jsonify({'error': 'Another capture is in progress'}), 429  # Too Many Requests
+        
     capturing = True
     try:
-        print("Capturing image...")
-        image = capture_image()
-        print("Image captured!")
+        print("Starting capture process...")
+        try:
+            print("Calling capture_image()...")
+            image = capture_image()
+            print("Image captured successfully!")
+        except Exception as e:
+            print(f"Error during image capture: {str(e)}")
+            print(f"Error type: {type(e)}")
+            import traceback
+            print(f"Capture error traceback: {traceback.format_exc()}")
+            return jsonify({'error': f'Image capture failed: {str(e)}'}), 500
+
+        # Check gray percentage before proceeding
+        try:
+            gray_percentage = detect_gray_percentage(image)
+            print(f"Gray percentage in image: {gray_percentage}%")
+            
+            if gray_percentage < 60:
+                print("Not enough gray area detected in image")
+                return jsonify({
+                    'image': image,
+                    'objects': [],
+                    'result_image': image,
+                    'error': 'No hay capo',
+                    'gray_percentage': float(gray_percentage)
+                })
+        except Exception as e:
+            print(f"Error during gray detection: {str(e)}")
+            print(f"Error type: {type(e)}")
+            import traceback
+            print(f"Gray detection error traceback: {traceback.format_exc()}")
+            return jsonify({'error': f'Gray detection failed: {str(e)}'}), 500
+        
+        print("Loading model and label files...")
         # Try with application path first, fallback to current directory
         try:
             model_path = './application/detect.tflite'
             label_path = './application/labelmap.txt'
+            print(f"Attempting to load files from application directory: {model_path}, {label_path}")
+            
+            if not os.path.exists(model_path):
+                print(f"Model file not found at {model_path}")
+                model_path = './detect.tflite'
+                print(f"Trying alternate path: {model_path}")
+                
+            if not os.path.exists(label_path):
+                print(f"Label file not found at {label_path}")
+                label_path = './labelmap.txt'
+                print(f"Trying alternate path: {label_path}")
+            
             with open(label_path, 'r') as f:
                 labels = [line.strip() for line in f.readlines()]
-        except FileNotFoundError:
-            model_path = './detect.tflite'
-            label_path = './labelmap.txt'
-            with open(label_path, 'r') as f:
-                labels = [line.strip() for line in f.readlines()]
+                print(f"Loaded {len(labels)} labels: {labels}")
+        except Exception as e:
+            print(f"Error loading model/label files: {str(e)}")
+            print(f"Error type: {type(e)}")
+            import traceback
+            print(f"Model loading error traceback: {traceback.format_exc()}")
+            return jsonify({'error': f'Failed to load model or labels: {str(e)}'}), 500
 
-        print(config['min_conf_threshold'])
-        result_image, detected_objects = tflite_detect_image(model_path, image, labels, config['min_conf_threshold'])
-        print("Objects detected!")
+        print(f"Files loaded successfully. Using confidence threshold: {config.get('min_conf_threshold', 0.5)}")
+        try:
+            result_image, detected_objects = tflite_detect_image(
+                model_path, 
+                image, 
+                labels, 
+                config.get('min_conf_threshold', 0.5)
+            )
+            print(f"Objects detected successfully! Found {len(detected_objects)} objects")
+        except Exception as e:
+            print(f"Error during object detection: {str(e)}")
+            print(f"Error type: {type(e)}")
+            import traceback
+            print(f"Detection error traceback: {traceback.format_exc()}")
+            return jsonify({'error': f'Object detection failed: {str(e)}'}), 500
         
         # Return detection results
-        response_data = {'image': image, 'objects': detected_objects, 'result_image': result_image}
+        response_data = {
+            'image': image, 
+            'objects': detected_objects, 
+            'result_image': result_image,
+            'gray_percentage': float(gray_percentage)  # Ensure it's a float
+        }
         
         # If this is a queued car and the result will be NG, send to ICS
         if request.args.get('car_id') and request.args.get('expected_part') and request.args.get('actual_part'):
@@ -362,20 +433,33 @@ def capture_and_detect():
             
             # Only send to ICS if result is NG
             if expected_part != actual_part:
-                # First get the VIN
-                vin = ics.request_vin(car_id)
-                if vin:
-                    # Send defect data to ICS
-                    ics.send_defect_data(
-                        vin=vin,
-                        image_base64=result_image,  # Use the processed image
-                        expected_part=expected_part,
-                        actual_part=actual_part
-                    )
+                try:
+                    print(f"Sending data to ICS for car_id: {car_id}")
+                    vin = ics.request_vin(car_id)
+                    if vin:
+                        ics.send_defect_data(
+                            vin=vin,
+                            image_base64=result_image,
+                            expected_part=expected_part,
+                            actual_part=actual_part
+                        )
+                        print("Data sent to ICS successfully")
+                except Exception as e:
+                    print(f"Error sending to ICS: {str(e)}")
+                    # Don't fail the whole request if ICS communication fails
         
+        print("Capture and detect process completed successfully")
         return jsonify(response_data)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500  # Internal Server Error
+        print(f"Error in capture and detect: {str(e)}")
+        print(f"Error type: {type(e)}")
+        import traceback
+        print("Full traceback:")
+        print(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
+    finally:
+        capturing = False  # Always reset the capturing flag
+        print("Capture flag reset")
 
 @app.route('/check-car/<car_id>', methods=['GET'])
 def check_car(car_id):

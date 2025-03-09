@@ -5,10 +5,18 @@
         </InspectionCard>
         <InspectionCard class="status" title="Estado" :style="getOutcomeStyle(modelValue?.outcome)">
             <div class="outcome">
-            <br />
+                <br />
                 <p>Esperado: {{ modelValue?.expectedPart }}</p>
-            <br />
+                <br />
                 <p>Resultado: {{ modelValue?.actualPart }}</p>
+                <br />
+                <p v-if="modelValue?.grayPercentage !== undefined" 
+                   :class="{ 'error-text': modelValue.grayPercentage < 60 }">
+                    Porcentaje de gris: {{ modelValue.grayPercentage.toFixed(2) }}%
+                    <span v-if="modelValue.grayPercentage < 60" class="error-message">
+                        (Insuficiente - Mínimo requerido: 60%)
+                    </span>
+                </p>
             </div>
         </InspectionCard>
     </div>
@@ -70,5 +78,15 @@ function getOutcomeStyle(outcome: string) {
     flex-direction: column;
     justify-content: center;
     align-items: start;
+}
+
+.error-text {
+    color: var(--no-good-100);
+}
+
+.error-message {
+    font-size: 0.8em;
+    display: block;
+    margin-top: 5px;
 }
 </style>

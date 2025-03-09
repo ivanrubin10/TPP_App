@@ -52,6 +52,17 @@ type Item = {
   resultImage: string;
   date: string;
   isQueued: boolean;
+  grayPercentage?: number;
+}
+
+interface LogResponse {
+  car_id: string;
+  expected_part: string;
+  actual_part: string;
+  outcome: string;
+  original_image_path: string;
+  result_image_path: string;
+  date: string;
 }
 
 const items = ref<Item[]>([]);
@@ -230,9 +241,9 @@ onMounted(async () => {
 
   // Fetch both logs and queued cars
   await Promise.all([
-    fetchLogs().then((response) => {
+    fetchLogs().then((response: LogResponse[]) => {
       console.log('Fetched logs:', response);
-      response.forEach((item: any) => {
+      response.forEach((item: LogResponse) => {
         items.value.push({
           id: item.car_id,
           expectedPart: item.expected_part,
@@ -284,111 +295,89 @@ const handleItemClicked = async (item: any) => {
 };
 
 const handleClick = async () => {
-  if (clickHandle) {
-    return;
-  }
-
+  if (clickHandle) return;
   clickHandle = true;
   try {
-    // Prepare car parameters for ICS if using GALC
-    const carParams = connectionType.value === 'GALC' ? {
+    const carParams = selectedItem.value ? {
       car_id: selectedItem.value.id,
       expected_part: selectedItem.value.expectedPart,
       actual_part: selectedItem.value.actualPart
-    } : undefined;
-    
+    } : null;
+
     const data = await captureImage(carParams);
-    console.log('Captured data:', data);
+    console.log('Raw response from capture:', data);
 
-    const currentDate = new Date();
-    selectedItem.value.date = `${currentDate.getDate()}-${currentDate.getMonth() + 1}-${currentDate.getFullYear()} ${currentDate.getHours()}:${currentDate.getMinutes()}:${currentDate.getSeconds()}`;
-    selectedItem.value.image = data.image;
-    detectedObjects.value = data.objects;
-    selectedItem.value.resultImage = data.resultImage;
-
-    if (data.objects.length === 0) {
-      selectedItem.value.actualPart = "Capo tipo 1";
-    } else if (data.objects.length === 2) {
-      selectedItem.value.actualPart = "Capo tipo 2";
-    } else if (data.objects.length === 3) {
-      selectedItem.value.actualPart = "Capo tipo 3";
-    } else {
-      selectedItem.value.actualPart = "";
-    }
-    console.log("actualPart: ", selectedItem.value.actualPart);
-
-    if (selectedItem.value.actualPart === selectedItem.value.expectedPart) {
-      selectedItem.value.outcome = "GOOD";
-    } else {
+    if (data.error === "No hay capo") {
+      selectedItem.value.actualPart = "No hay capo";
       selectedItem.value.outcome = "NOGOOD";
-      console.log(connectionType.value); 
-      // If GALC and NOGOOD, send to ICS
-      if (connectionType.value === 'GALC') {
-        console.log("Sending to ICS");
-        try {
-          await sendToICS({
-            car_id: selectedItem.value.id,
-            expected_part: selectedItem.value.expectedPart,
-            actual_part: selectedItem.value.actualPart,
-            image: data.resultImage
-          });
-        } catch (error) {
-          console.error('Error sending to ICS:', error);
-        }
+      selectedItem.value.grayPercentage = data.gray_percentage;
+      console.log('Gray percentage too low:', data.gray_percentage);
+    } else {
+      selectedItem.value.image = data.image;
+      selectedItem.value.resultImage = data.resultImage;
+      selectedItem.value.grayPercentage = data.gray_percentage;
+      console.log('Gray percentage:', data.gray_percentage);
+
+      if (detectedObjects.value.length === 0) {
+        selectedItem.value.actualPart = "No hay capo";
+        selectedItem.value.outcome = "NOGOOD";
+      } else if (detectedObjects.value.length === 2) {
+        selectedItem.value.actualPart = "Capo tipo 1";
+        selectedItem.value.outcome = selectedItem.value.expectedPart === "Capo tipo 1" ? "GOOD" : "NOGOOD";
+      } else if (detectedObjects.value.length === 3) {
+        selectedItem.value.actualPart = "Capo tipo 2";
+        selectedItem.value.outcome = selectedItem.value.expectedPart === "Capo tipo 2" ? "GOOD" : "NOGOOD";
+      }
+
+      // If connection type is GALC and outcome is NOGOOD, send to ICS
+      if (connectionType.value === 'GALC' && selectedItem.value.outcome === 'NOGOOD') {
+        await sendToICS({
+          car_id: selectedItem.value.id,
+          expected_part: selectedItem.value.expectedPart,
+          actual_part: selectedItem.value.actualPart,
+          outcome: selectedItem.value.outcome,
+          gray_percentage: selectedItem.value.grayPercentage
+        });
+      }
+
+      // Check if car exists in database
+      const exists = await checkCarExists(selectedItem.value.id);
+      if (exists) {
+        // Update existing log
+        await updateItem({
+          car_id: selectedItem.value.id,
+          expected_part: selectedItem.value.expectedPart,
+          actual_part: selectedItem.value.actualPart,
+          outcome: selectedItem.value.outcome,
+          original_image_path: selectedItem.value.image,
+          result_image_path: selectedItem.value.resultImage,
+          gray_percentage: selectedItem.value.grayPercentage
+        });
+      } else {
+        // Add new log
+        await addLog({
+          car_id: selectedItem.value.id,
+          expected_part: selectedItem.value.expectedPart,
+          actual_part: selectedItem.value.actualPart,
+          outcome: selectedItem.value.outcome,
+          original_image_path: selectedItem.value.image,
+          result_image_path: selectedItem.value.resultImage,
+          gray_percentage: selectedItem.value.grayPercentage
+        });
+      }
+
+      // If this was a queued car, mark it as processed
+      if (selectedItem.value.isQueued) {
+        await processQueuedCar(selectedItem.value.id);
+        selectedItem.value.isQueued = false;
       }
     }
-    const carId = selectedItem.value.id;
-
-    // Check if the car exists in the database
-    const carExists = await checkCarExists(carId);
-
-    if (carExists.exists) {
-      // Update the existing log with new images and status
-      const itemToUpdate = {
-        id: carExists.car_log.id,
-        car_id: carId,
-        date: selectedItem.value.date,
-        expected_part: selectedItem.value.expectedPart,
-        actual_part: selectedItem.value.actualPart,
-        original_image_path: data.image,
-        result_image_path: data.resultImage,
-        outcome: selectedItem.value.outcome,
-      };
-      await updateItem(itemToUpdate);
-    } else {
-      // Add a new log with captured images and status
-      const newLog = {
-        car_id: carId,
-        date: selectedItem.value.date,
-        expected_part: selectedItem.value.expectedPart,
-        actual_part: selectedItem.value.actualPart,
-        original_image_path: data.image,
-        result_image_path: data.resultImage,
-        outcome: selectedItem.value.outcome,
-      };
-      await addLog(newLog);
-    }
-
-    // If this was a queued car that was just processed, mark it as processed
-    if (selectedItem.value.isQueued) {
-      await processQueuedCar(carId);
-      selectedItem.value.isQueued = false;
-    }
-
   } catch (error) {
-    console.error('Error capturing data:', error);
-    if (connectionType.value === 'GALC') {
-      // ElNotification({
-      //   title: 'Error',
-      //   message: 'Error al procesar la detección',
-      //   type: 'error',
-      //   duration: 3000
-      // });
-    }
+    console.error('Error in handleClick:', error);
+  } finally {
+    clickHandle = false;
   }
-
-  clickHandle = false;
-};
+}
 
 function esDefecto(item: any) {
   console.log("es defecto", item);
