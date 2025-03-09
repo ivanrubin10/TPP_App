@@ -5,7 +5,7 @@ import threading
 from flask_socketio import SocketIO, emit
 from camera import capture_image
 from flask_cors import CORS
-from tflite_detector import tflite_detect_image
+from tflite_detector import tflite_detect_image, load_tflite_model
 from flask_sqlalchemy import SQLAlchemy
 from flask_marshmallow import Marshmallow
 from marshmallow_sqlalchemy import SQLAlchemySchema, auto_field
@@ -28,6 +28,52 @@ app.config['UPLOAD_FOLDER'] = 'uploads/'
 db = SQLAlchemy(app)
 ma = Marshmallow(app)
 ics = ICSIntegration()  # Initialize ICS integration
+
+# Cache for TFLite model and labels
+model_cache = {
+    'interpreter': None,
+    'labels': None,
+    'last_loaded': 0
+}
+
+# Function to get or load the model and labels
+def get_model_and_labels():
+    global model_cache
+    
+    # If model is not loaded or it's been more than 1 hour since last load
+    current_time = time.time()
+    if model_cache['interpreter'] is None or current_time - model_cache['last_loaded'] > 3600:
+        print("Loading model and labels into cache...")
+        try:
+            # Try with application path first, fallback to current directory
+            model_path = './application/detect.tflite'
+            label_path = './application/labelmap.txt'
+            
+            if not os.path.exists(model_path):
+                model_path = './detect.tflite'
+                
+            if not os.path.exists(label_path):
+                label_path = './labelmap.txt'
+            
+            # Load labels
+            with open(label_path, 'r') as f:
+                labels = [line.strip() for line in f.readlines()]
+            
+            # Load model
+            interpreter = load_tflite_model(model_path)
+            
+            # Update cache
+            model_cache['interpreter'] = interpreter
+            model_cache['labels'] = labels
+            model_cache['last_loaded'] = current_time
+            
+            print(f"Model and labels loaded successfully. Found {len(labels)} labels.")
+            return interpreter, labels
+        except Exception as e:
+            print(f"Error loading model/labels: {str(e)}")
+            raise
+    else:
+        return model_cache['interpreter'], model_cache['labels']
 
 # Define CarLog model
 class CarLog(db.Model):
@@ -238,32 +284,120 @@ def connect_to_galc():
         print(f"GALC connection error: {e}")
 
 def handle_plc_response(conn):
-    global plc_connection
+    global plc_connection, is_connected
+    
+    # Set a timeout to prevent blocking indefinitely
+    conn.settimeout(1.0)
+    
     while True:
-        socketio.emit('connection_status', {'status': True if is_connected else False})
-        socketio.emit('connection_type', {'type': config['connection_type']})
         try:
-            # Receive data from the PLC
-            data = conn.recv(1024)
-            if not data:
-                print("No data received from PLC, closing connection.")
+            socketio.emit('connection_status', {'status': True if is_connected else False})
+            socketio.emit('connection_type', {'type': config['connection_type']})
+            
+            try:
+                # Receive data from the PLC
+                data = conn.recv(1024)
+                if not data:
+                    print("No data received from PLC, closing connection.")
+                    break
+
+                # Decode the message
+                message = data.decode(errors='replace')
+                print(f"Received PLC data: {message}")
+                
+                # Parse the message format: SequenceBodyCapot (e.g., 123A123408)
+                if len(message) >= 10:  # Ensure message is at least 10 characters
+                    try:
+                        # Extract parts of the message
+                        sequence = message[:3]  # First 3 characters (e.g., 123)
+                        body = message[3:8]     # Next 5 characters (e.g., A1234)
+                        capot_type = message[8:10]  # Last 2 characters (e.g., 08)
+                        
+                        print(f"Parsed PLC message:")
+                        print(f"  - Sequence: {sequence}")
+                        print(f"  - Body: {body}")
+                        print(f"  - Capot: {capot_type}")
+                        
+                        # Map capot type to expected part
+                        expected_part = {
+                            "01": "Capo tipo 1",
+                            "05": "Capo tipo 2",
+                            "08": "Capo tipo 3"
+                        }.get(capot_type)
+                        
+                        if expected_part:
+                            # Generate a unique car ID
+                            car_id = f"PLC_{int(time.time())}_{capot_type}"
+                            current_date = time.strftime("%d-%m-%Y %H:%M:%S")
+                            
+                            # Emit the message to the frontend
+                            socketio.emit('plc_message', {'message': capot_type})
+                            
+                            # Create a new log entry directly (no queuing for PLC)
+                            new_log = CarLog(
+                                car_id=car_id,
+                                date=current_date,
+                                expected_part=expected_part,
+                                actual_part="",  # Will be filled after detection
+                                original_image_path="",  # Will be filled after detection
+                                result_image_path="",  # Will be filled after detection
+                                outcome=""  # Will be filled after detection
+                            )
+                            
+                            # Use application context for database operations
+                            with app.app_context():
+                                try:
+                                    db.session.add(new_log)
+                                    db.session.commit()
+                                    print(f"Added new PLC log entry with ID: {new_log.id}")
+                                    
+                                    # Create a dictionary for frontend notification
+                                    log_dict = {
+                                        'id': car_id,
+                                        'expectedPart': expected_part,
+                                        'actualPart': "",
+                                        'outcome': "",
+                                        'image': "",
+                                        'resultImage': "",
+                                        'date': current_date,
+                                        'isQueued': False
+                                    }
+                                    
+                                    # Notify frontend about new car
+                                    socketio.emit('new_car', log_dict)
+                                except Exception as e:
+                                    print(f"Error adding PLC log to database: {e}")
+                                    db.session.rollback()
+                        else:
+                            print(f"Unknown capot type: {capot_type}")
+                    except Exception as e:
+                        print(f"Error parsing PLC message: {e}")
+                else:
+                    print(f"Invalid PLC message format: {message}")
+                
+                # Send a response back to the PLC (can be customized based on processing result)
+                response = b"OK"
+                conn.sendall(response)
+                print(f"Sent PLC response: {response.decode()}")
+            except socket.timeout:
+                # This is normal, just continue the loop
+                continue
+            except ConnectionResetError:
+                print("Connection reset by PLC")
                 break
-
-            print(f"Received PLC data: {data.decode(errors='replace')}")
-
-            # Process PLC data and emit events as necessary
-            message = data.decode()  # Example decoding
-            socketio.emit('plc_message', {'message': message})  # Notify frontend
-            time.wait(1)
-            # Send a response back to the PLC
-            response = b"OK" if "GOOD" in message else b"NG"
-            conn.sendall(response)
-            print(f"Sent PLC response: {response.decode()}")
+            except Exception as e:
+                print(f"Error handling PLC message: {e}")
+                # Don't break the loop for other exceptions, just continue
+                continue
+                
         except Exception as e:
-            print(f"Error handling PLC message: {e}")
+            print(f"Outer error in PLC handler: {e}")
             break
+            
+    print("PLC connection handler terminated")
     conn.close()
     plc_connection = None  # Reset PLC connection
+    is_connected = False  # Update connection status
 
 def connect_to_plc():
     global client_socket, is_connected, plc_connection
@@ -335,16 +469,31 @@ def handle_retry_connection():
 def capture_and_detect():
     global config, capturing
     
+    # Validate input parameters if they exist
+    car_id = request.args.get('car_id')
+    expected_part = request.args.get('expected_part')
+    actual_part = request.args.get('actual_part')
+    
+    print(f"Capture request received with params: car_id={car_id}, expected_part={expected_part}, actual_part={actual_part}")
+    
+    # Check if we have partial parameters
+    if any([car_id, expected_part, actual_part]) and not all([car_id, expected_part]):
+        print("Incomplete car parameters provided")
+        return jsonify({'error': 'If providing car parameters, both car_id and expected_part must be provided'}), 400
+    
     if capturing:
         print("Another capture is in progress, returning 429")
         return jsonify({'error': 'Another capture is in progress'}), 429  # Too Many Requests
         
     capturing = True
+    start_time = time.time()
     try:
         print("Starting capture process...")
         try:
             print("Calling capture_image()...")
             image = capture_image()
+            if not image:
+                raise ValueError("No image data received from capture")
             print("Image captured successfully!")
         except Exception as e:
             print(f"Error during image capture: {str(e)}")
@@ -360,12 +509,14 @@ def capture_and_detect():
             
             if gray_percentage < 60:
                 print("Not enough gray area detected in image")
+                # Still send the captured image to the frontend
                 return jsonify({
-                    'image': image,
+                    'image': image,  # Original image
                     'objects': [],
-                    'result_image': image,
+                    'result_image': image,  # Use original image as result image
                     'error': 'No hay capo',
-                    'gray_percentage': float(gray_percentage)
+                    'gray_percentage': float(gray_percentage),
+                    'skip_database_update': True  # Flag to indicate frontend should not update database
                 })
         except Exception as e:
             print(f"Error during gray detection: {str(e)}")
@@ -374,37 +525,17 @@ def capture_and_detect():
             print(f"Gray detection error traceback: {traceback.format_exc()}")
             return jsonify({'error': f'Gray detection failed: {str(e)}'}), 500
         
-        print("Loading model and label files...")
-        # Try with application path first, fallback to current directory
+        # Get cached model and labels
         try:
-            model_path = './application/detect.tflite'
-            label_path = './application/labelmap.txt'
-            print(f"Attempting to load files from application directory: {model_path}, {label_path}")
-            
-            if not os.path.exists(model_path):
-                print(f"Model file not found at {model_path}")
-                model_path = './detect.tflite'
-                print(f"Trying alternate path: {model_path}")
-                
-            if not os.path.exists(label_path):
-                print(f"Label file not found at {label_path}")
-                label_path = './labelmap.txt'
-                print(f"Trying alternate path: {label_path}")
-            
-            with open(label_path, 'r') as f:
-                labels = [line.strip() for line in f.readlines()]
-                print(f"Loaded {len(labels)} labels: {labels}")
+            interpreter, labels = get_model_and_labels()
         except Exception as e:
-            print(f"Error loading model/label files: {str(e)}")
-            print(f"Error type: {type(e)}")
-            import traceback
-            print(f"Model loading error traceback: {traceback.format_exc()}")
+            print(f"Error getting model/labels: {str(e)}")
             return jsonify({'error': f'Failed to load model or labels: {str(e)}'}), 500
 
-        print(f"Files loaded successfully. Using confidence threshold: {config.get('min_conf_threshold', 0.5)}")
+        print(f"Using confidence threshold: {config.get('min_conf_threshold', 0.5)}")
         try:
             result_image, detected_objects = tflite_detect_image(
-                model_path, 
+                interpreter,  # Use the cached interpreter
                 image, 
                 labels, 
                 config.get('min_conf_threshold', 0.5)
@@ -422,15 +553,12 @@ def capture_and_detect():
             'image': image, 
             'objects': detected_objects, 
             'result_image': result_image,
-            'gray_percentage': float(gray_percentage)  # Ensure it's a float
+            'gray_percentage': float(gray_percentage),  # Ensure it's a float
+            'processing_time': time.time() - start_time  # Add processing time for debugging
         }
         
         # If this is a queued car and the result will be NG, send to ICS
-        if request.args.get('car_id') and request.args.get('expected_part') and request.args.get('actual_part'):
-            car_id = request.args.get('car_id')
-            expected_part = request.args.get('expected_part')
-            actual_part = request.args.get('actual_part')
-            
+        if car_id and expected_part and actual_part:
             # Only send to ICS if result is NG
             if expected_part != actual_part:
                 try:
@@ -448,7 +576,7 @@ def capture_and_detect():
                     print(f"Error sending to ICS: {str(e)}")
                     # Don't fail the whole request if ICS communication fails
         
-        print("Capture and detect process completed successfully")
+        print(f"Capture and detect process completed in {time.time() - start_time:.2f} seconds")
         return jsonify(response_data)
     except Exception as e:
         print(f"Error in capture and detect: {str(e)}")
@@ -459,30 +587,60 @@ def capture_and_detect():
         return jsonify({'error': str(e)}), 500
     finally:
         capturing = False  # Always reset the capturing flag
-        print("Capture flag reset")
+        print(f"Capture flag reset after {time.time() - start_time:.2f} seconds")
 
 @app.route('/check-car/<car_id>', methods=['GET'])
 def check_car(car_id):
-    car_log = CarLog.query.filter_by(car_id=car_id).first()
-    if car_log:
-        return jsonify({'exists': True, 'car_log': car_log_schema.dump(car_log)})
-    else:
-        return jsonify({'exists': False})
+    try:
+        print(f"Checking if car exists with ID: {car_id}")
+        car_log = CarLog.query.filter_by(car_id=car_id).first()
+        if car_log:
+            print(f"Found car with ID: {car_log.id}")
+            return jsonify({'exists': True, 'car_log': car_log_schema.dump(car_log)})
+        else:
+            print(f"No car found with ID: {car_id}")
+            return jsonify({'exists': False})
+    except Exception as e:
+        error_msg = f"Error checking car: {str(e)}"
+        print(error_msg)
+        import traceback
+        print(traceback.format_exc())
+        return jsonify({'error': error_msg}), 500
 
 @app.route('/update-item', methods=['PUT'])
 def update_item():
     try:
+        print("Received request to update item")
         data = request.get_json()
-        car_log = db.session.get(CarLog, data['id'])
+        print(f"Request data: {data}")
+        
+        # Validate required fields
+        required_fields = ['car_id', 'expected_part', 'actual_part', 'original_image_path', 'result_image_path', 'outcome']
+        for field in required_fields:
+            if field not in data or data[field] is None:
+                error_msg = f"Missing required field: {field}"
+                print(error_msg)
+                return jsonify({'error': error_msg}), 400
+        
+        print(f"Looking for car with ID: {data['car_id']}")
+        car_log = CarLog.query.filter_by(car_id=data['car_id']).first()
         if car_log:
-            car_log.car_id = data['car_id']
-            car_log.date = data['date']
+            print(f"Found car with ID: {car_log.id}, updating fields")
             car_log.expected_part = data['expected_part']
             car_log.actual_part = data['actual_part']
             car_log.original_image_path = data['original_image_path']
             car_log.result_image_path = data['result_image_path']
             car_log.outcome = data['outcome']
-            db.session.commit()
+            
+            try:
+                db.session.commit()
+                print(f"Successfully updated car with ID: {car_log.id}")
+            except Exception as e:
+                db.session.rollback()
+                error_msg = f"Database error during commit: {str(e)}"
+                print(error_msg)
+                return jsonify({'error': error_msg}), 500
+            
             # Convert the updated car log object to a dictionary
             updated_log = {
                 'id': car_log.id,
@@ -496,14 +654,39 @@ def update_item():
             }
             return jsonify(updated_log)
         else:
-            return jsonify({'error': 'Car log not found'}), 404
+            error_msg = f"Car log not found for car_id: {data['car_id']}"
+            print(error_msg)
+            return jsonify({'error': error_msg}), 404
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        error_msg = f"Error updating item: {str(e)}"
+        print(error_msg)
+        import traceback
+        print(traceback.format_exc())
+        return jsonify({'error': error_msg}), 500
 
 @app.route('/log', methods=['POST'])
 def add_log():
     try:
+        print("Received request to add log")
         data = request.get_json()
+        print(f"Request data: {data}")
+        
+        # Validate required fields
+        required_fields = ['car_id', 'date', 'expected_part', 'actual_part', 'original_image_path', 'result_image_path', 'outcome']
+        for field in required_fields:
+            if field not in data or not data[field]:
+                error_msg = f"Missing required field: {field}"
+                print(error_msg)
+                return jsonify({'error': error_msg}), 400
+        
+        # Check if car_id already exists
+        existing_log = CarLog.query.filter_by(car_id=data['car_id']).first()
+        if existing_log:
+            error_msg = f"Car with ID {data['car_id']} already exists. Use update-item endpoint instead."
+            print(error_msg)
+            return jsonify({'error': error_msg}), 409  # Conflict
+        
+        # Create new log
         new_log = CarLog(
             car_id=data['car_id'],
             date=data['date'],
@@ -513,8 +696,11 @@ def add_log():
             result_image_path=data['result_image_path'],
             outcome=data['outcome']
         )
+        
+        print(f"Adding new log for car_id: {data['car_id']}")
         db.session.add(new_log)
         db.session.commit()
+        print(f"Successfully added log with ID: {new_log.id}")
         
         # Convert the new log to a dictionary for JSON serialization
         log_dict = {
@@ -530,7 +716,11 @@ def add_log():
         
         return jsonify(log_dict)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        error_msg = f"Error adding log: {str(e)}"
+        print(error_msg)
+        import traceback
+        print(traceback.format_exc())
+        return jsonify({'error': error_msg}), 500
 
 
 @app.route('/logs', methods=['GET'])
@@ -579,12 +769,32 @@ def get_queued_cars():
 # Add endpoint to mark a queued car as processed
 @app.route('/process-queued-car/<car_id>', methods=['POST'])
 def process_queued_car(car_id):
-    queued_car = QueuedCar.query.filter_by(car_id=car_id).first()
-    if queued_car:
+    try:
+        print(f"Processing queued car with ID: {car_id}")
+        queued_car = QueuedCar.query.filter_by(car_id=car_id).first()
+        
+        if not queued_car:
+            print(f"No queued car found with ID: {car_id}")
+            return jsonify({"error": "Car not found"}), 404
+            
+        # Mark the car as processed
         queued_car.is_processed = True
         db.session.commit()
-        return jsonify({"message": "Car marked as processed"}), 200
-    return jsonify({"error": "Car not found"}), 404
+        
+        print(f"Car {car_id} marked as processed successfully")
+        
+        # Return the car details
+        return jsonify({
+            "message": "Car marked as processed",
+            "car_id": queued_car.car_id,
+            "expected_part": queued_car.expected_part,
+            "date": queued_car.date,
+            "is_processed": queued_car.is_processed
+        }), 200
+    except Exception as e:
+        print(f"Error processing queued car: {str(e)}")
+        db.session.rollback()
+        return jsonify({"error": f"Failed to process car: {str(e)}"}), 500
 
 @app.route('/send-to-ics', methods=['POST'])
 def send_to_ics():

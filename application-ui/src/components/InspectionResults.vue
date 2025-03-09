@@ -10,13 +10,6 @@
                 <br />
                 <p>Resultado: {{ modelValue?.actualPart }}</p>
                 <br />
-                <p v-if="modelValue?.grayPercentage !== undefined" 
-                   :class="{ 'error-text': modelValue.grayPercentage < 60 }">
-                    Porcentaje de gris: {{ modelValue.grayPercentage.toFixed(2) }}%
-                    <span v-if="modelValue.grayPercentage < 60" class="error-message">
-                        (Insuficiente - Mínimo requerido: 60%)
-                    </span>
-                </p>
             </div>
         </InspectionCard>
     </div>
@@ -39,6 +32,9 @@ watch(
     () => props.modelValue,
     (newValue) => {
         modelValue.value = newValue;
+        if (newValue?.grayPercentage !== undefined) {
+            console.log(`Gray percentage: ${newValue.grayPercentage.toFixed(2)}%`);
+        }
     },
     { immediate: true, deep: true }
 );

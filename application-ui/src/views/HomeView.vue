@@ -14,12 +14,20 @@
       </div>
       <InspectionResults v-model="selectedItem" />
       <div class="inspection-footer">
-        <FalseOutcomeButton v-if="!selectedItem.resultImage" @click="handleClick" text="Detectar" />
-        <FalseOutcomeButton v-else @click="handleClick" text="Detectar nuevamente" />
-        <FalseOutcomeButton v-show="selectedItem.outcome === 'NOGOOD'" @click="noEsDefecto(selectedItem)"
-          text="No es defecto" />
-        <FalseOutcomeButton v-show="selectedItem.outcome === 'GOOD'" @click="esDefecto(selectedItem)"
-          text="Es defecto" />
+        <div v-if="isLoading" class="loading-indicator">
+          <svg class="spinning" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          <span>{{ loadingMessage }}</span>
+        </div>
+        <template v-else>
+          <FalseOutcomeButton v-if="!selectedItem.resultImage" @click="handleClick" text="Detectar" />
+          <FalseOutcomeButton v-else @click="handleClick" text="Detectar nuevamente" />
+          <FalseOutcomeButton v-show="selectedItem.outcome === 'NOGOOD'" @click="noEsDefecto(selectedItem)"
+            text="No es defecto" />
+          <FalseOutcomeButton v-show="selectedItem.outcome === 'GOOD'" @click="esDefecto(selectedItem)"
+            text="Es defecto" />
+        </template>
       </div>
     </div>
     <div class="container" v-else>
@@ -86,6 +94,8 @@ const { captureImage,
 let clickHandle = false;
 
 const isRetrying = ref(false);
+const isLoading = ref(false);
+const loadingMessage = ref('');
 
 const fetchQueuedCars = async () => {
   try {
@@ -136,7 +146,8 @@ onMounted(async () => {
   
   socket.on('plc_message', async (data: any) => {
     console.log(`Received message from PLC:`, data.message);
-    await handleMessage(data, 'plc');
+    // The handleMessage function is no longer needed for PLC messages
+    // as we're now directly creating the car in the backend
   });
 
   socket.on('handle_message', async (data: any) => {
@@ -148,7 +159,7 @@ onMounted(async () => {
     messageBeingHandled.value = true;
     try {
       console.log(`Received message from GALC:`, data.message);
-      await handleMessage(data, 'galc').then(() => {
+      await handleMessage(data).then(() => {
         messageBeingHandled.value = false;
       });
     } catch (error) {
@@ -156,6 +167,17 @@ onMounted(async () => {
     } finally {
       messageBeingHandled.value = false; // Reset the flag after processing
     }
+  });
+
+  // Listen for new cars from PLC
+  socket.on('new_car', (car: any) => {
+    console.log('Received new car from PLC:', car);
+    // Add the new car to the items list
+    items.value.push(car);
+    // Sort items to ensure the new car appears in the correct position
+    items.value = sortItems(items.value);
+    // Automatically select the new car
+    selectedItem.value = car;
   });
 
   // Listen for new queued cars from GALC
@@ -177,7 +199,7 @@ onMounted(async () => {
 
   let isProcessing = false;
 
-  async function handleMessage(data: any, type: 'plc' | 'galc') {
+  async function handleMessage(data: any) {
     if (isProcessing) {
       console.warn('Message handling is already in progress. Ignoring this message.');
       return;
@@ -204,36 +226,9 @@ onMounted(async () => {
           return;
       }
 
-      // For PLC, process immediately. For GALC, this won't be called as we're using the queue system
-      if (type === 'plc') {
-        const newItem = {
-          car_id: Math.random().toString(36).slice(2, 8),
-          date: formattedDate,
-          expected_part: expectedPart,
-          actual_part: '',
-          original_image_path: '',
-          result_image_path: '',
-          outcome: ''
-        };
-
-        await addLog(newItem);
-
-        items.value.push({
-          id: newItem.car_id,
-          expectedPart: newItem.expected_part,
-          actualPart: newItem.actual_part,
-          outcome: newItem.outcome,
-          image: newItem.original_image_path,
-          resultImage: newItem.result_image_path,
-          date: newItem.date,
-          isQueued: false
-        });
-        
-        selectedItem.value = items.value[items.value.length - 1];
-        await handleClick();
-
-        socket.emit('plc_response', { message: expectedPart === selectedItem.value.actualPart ? 'GOOD' : 'NOGOOD' });
-      }
+      // This function now only handles GALC messages
+      // GALC messages are queued and don't need immediate processing
+      console.log('GALC message processed');
     } finally {
       isProcessing = false;
     }
@@ -280,7 +275,9 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   socket.off('connection_status');
   socket.off('connection_type');
+  socket.off('plc_message');
   socket.off('handle_message');
+  socket.off('new_car');
   socket.off('new_queued_car');
 });
 
@@ -297,84 +294,197 @@ const handleItemClicked = async (item: any) => {
 const handleClick = async () => {
   if (clickHandle) return;
   clickHandle = true;
+  isLoading.value = true;
+  loadingMessage.value = 'Procesando imagen...';
+  
+  // Set a timeout to show a message if it takes too long
+  const timeoutId = setTimeout(() => {
+    loadingMessage.value = 'Esto está tomando más tiempo de lo esperado. Por favor espere...';
+  }, 5000); // 5 seconds
+  
   try {
+    // Check if the selected item is a queued car and process it first
+    if (selectedItem.value && selectedItem.value.isQueued) {
+      loadingMessage.value = 'Procesando coche en cola...';
+      try {
+        console.log('Processing queued car:', selectedItem.value.id);
+        const processResponse = await processQueuedCar(selectedItem.value.id);
+        console.log('Process queued car response:', processResponse);
+        
+        // Update the item to show it's no longer queued
+        selectedItem.value.isQueued = false;
+        
+        // Also update the item in the items array
+        const itemIndex = items.value.findIndex(item => item.id === selectedItem.value.id);
+        if (itemIndex !== -1) {
+          items.value[itemIndex].isQueued = false;
+        }
+      } catch (error) {
+        console.error('Error processing queued car:', error);
+        // Continue with the flow even if processing fails
+      }
+    }
+
+    // Prepare car parameters for the capture image request
     const carParams = selectedItem.value ? {
       car_id: selectedItem.value.id,
       expected_part: selectedItem.value.expectedPart,
-      actual_part: selectedItem.value.actualPart
-    } : null;
+      actual_part: selectedItem.value.actualPart || '' // Ensure actual_part is never undefined
+    } : undefined;
 
+    console.log('Sending capture image request with params:', carParams);
+    
+    // Capture the image and get detection results
+    loadingMessage.value = 'Capturando imagen y detectando objetos...';
     const data = await captureImage(carParams);
     console.log('Raw response from capture:', data);
+    
+    if (data.processing_time) {
+      console.log(`Server processing time: ${data.processing_time.toFixed(2)} seconds`);
+    }
 
     if (data.error === "No hay capo") {
       selectedItem.value.actualPart = "No hay capo";
       selectedItem.value.outcome = "NOGOOD";
       selectedItem.value.grayPercentage = data.gray_percentage;
+      
+      // Make sure to update the image even when gray percentage is low
+      selectedItem.value.image = data.image;
+      selectedItem.value.resultImage = data.resultImage;
+      
       console.log('Gray percentage too low:', data.gray_percentage);
+      
+      // Skip database update if the flag is set
+      if (data.skip_database_update) {
+        console.log('Skipping database update due to low gray percentage');
+      } else {
+        // Update database logic would go here if needed
+      }
     } else {
       selectedItem.value.image = data.image;
       selectedItem.value.resultImage = data.resultImage;
       selectedItem.value.grayPercentage = data.gray_percentage;
       console.log('Gray percentage:', data.gray_percentage);
 
-      if (detectedObjects.value.length === 0) {
+      // Use the objects from the response instead of the ref
+      // Extract detected classes
+      const detectedClasses = data.objects.map(obj => obj.class);
+      console.log('Detected classes:', detectedClasses);
+      
+      // Check for specific object types
+      const hasGrande = detectedClasses.includes('grande');
+      const hasMediano = detectedClasses.includes('mediano');
+      const hasChico = detectedClasses.includes('chico');
+      const hasAmorfo = detectedClasses.includes('amorfo');
+      
+      // Count amorfo objects
+      const amorfoCount = detectedClasses.filter(cls => cls === 'amorfo').length;
+      
+      // Check for false positives (incompatible combinations)
+      const hasFalsePositive = (hasGrande || hasMediano || hasChico) && hasAmorfo;
+      
+      if (hasFalsePositive) {
+        // False positive detected - incompatible combination
+        selectedItem.value.actualPart = "Falso positivo";
+        selectedItem.value.outcome = "NOGOOD";
+        console.log('False positive detected: incompatible object combination');
+      } else if (detectedClasses.length === 0) {
+        // No objects detected
         selectedItem.value.actualPart = "No hay capo";
         selectedItem.value.outcome = "NOGOOD";
-      } else if (detectedObjects.value.length === 2) {
-        selectedItem.value.actualPart = "Capo tipo 1";
-        selectedItem.value.outcome = selectedItem.value.expectedPart === "Capo tipo 1" ? "GOOD" : "NOGOOD";
-      } else if (detectedObjects.value.length === 3) {
+      } else if (hasGrande || hasMediano || hasChico) {
+        // Capo tipo 3 - has any of grande, mediano, or chico
+        selectedItem.value.actualPart = "Capo tipo 3";
+        selectedItem.value.outcome = selectedItem.value.expectedPart === "Capo tipo 3" ? "GOOD" : "NOGOOD";
+      } else if (hasAmorfo && amorfoCount <= 2) {
+        // Capo tipo 2 - has one or two amorfo objects
         selectedItem.value.actualPart = "Capo tipo 2";
         selectedItem.value.outcome = selectedItem.value.expectedPart === "Capo tipo 2" ? "GOOD" : "NOGOOD";
+      } else {
+        // Unrecognized pattern
+        selectedItem.value.actualPart = "Patrón no reconocido";
+        selectedItem.value.outcome = "NOGOOD";
+        console.log('Unrecognized object pattern:', detectedClasses);
       }
 
       // If connection type is GALC and outcome is NOGOOD, send to ICS
       if (connectionType.value === 'GALC' && selectedItem.value.outcome === 'NOGOOD') {
-        await sendToICS({
-          car_id: selectedItem.value.id,
-          expected_part: selectedItem.value.expectedPart,
-          actual_part: selectedItem.value.actualPart,
-          outcome: selectedItem.value.outcome,
-          gray_percentage: selectedItem.value.grayPercentage
-        });
+        try {
+          loadingMessage.value = 'Enviando datos a ICS...';
+          await sendToICS({
+            car_id: selectedItem.value.id,
+            expected_part: selectedItem.value.expectedPart,
+            actual_part: selectedItem.value.actualPart,
+            outcome: selectedItem.value.outcome,
+            gray_percentage: selectedItem.value.grayPercentage
+          });
+        } catch (error) {
+          console.error('Error sending to ICS:', error);
+          // Continue with the flow even if ICS fails
+        }
+      }
+
+      // Check if we should skip database update
+      if (data.skip_database_update) {
+        console.log('Skipping database update due to flag from server');
+        return; // Skip the rest of the function
       }
 
       // Check if car exists in database
-      const exists = await checkCarExists(selectedItem.value.id);
-      if (exists) {
-        // Update existing log
-        await updateItem({
-          car_id: selectedItem.value.id,
-          expected_part: selectedItem.value.expectedPart,
-          actual_part: selectedItem.value.actualPart,
-          outcome: selectedItem.value.outcome,
-          original_image_path: selectedItem.value.image,
-          result_image_path: selectedItem.value.resultImage,
-          gray_percentage: selectedItem.value.grayPercentage
-        });
-      } else {
-        // Add new log
-        await addLog({
-          car_id: selectedItem.value.id,
-          expected_part: selectedItem.value.expectedPart,
-          actual_part: selectedItem.value.actualPart,
-          outcome: selectedItem.value.outcome,
-          original_image_path: selectedItem.value.image,
-          result_image_path: selectedItem.value.resultImage,
-          gray_percentage: selectedItem.value.grayPercentage
-        });
-      }
-
-      // If this was a queued car, mark it as processed
-      if (selectedItem.value.isQueued) {
-        await processQueuedCar(selectedItem.value.id);
-        selectedItem.value.isQueued = false;
+      try {
+        loadingMessage.value = 'Actualizando base de datos...';
+        console.log('Checking if car exists in database:', selectedItem.value.id);
+        const existsResponse = await checkCarExists(selectedItem.value.id);
+        console.log('Car exists response:', existsResponse);
+        
+        const exists = existsResponse.exists;
+        
+        if (exists) {
+          console.log('Updating existing car record');
+          // Update existing log
+          const updateData = {
+            car_id: selectedItem.value.id,
+            expected_part: selectedItem.value.expectedPart,
+            actual_part: selectedItem.value.actualPart,
+            outcome: selectedItem.value.outcome,
+            original_image_path: selectedItem.value.image,
+            result_image_path: selectedItem.value.resultImage
+          };
+          console.log('Update data:', updateData);
+          const updateResponse = await updateItem(updateData);
+          console.log('Update response:', updateResponse);
+        } else {
+          console.log('Adding new car record');
+          // Add new log
+          const logData = {
+            car_id: selectedItem.value.id,
+            date: new Date().toLocaleString(),
+            expected_part: selectedItem.value.expectedPart,
+            actual_part: selectedItem.value.actualPart,
+            outcome: selectedItem.value.outcome,
+            original_image_path: selectedItem.value.image,
+            result_image_path: selectedItem.value.resultImage
+          };
+          console.log('Log data:', logData);
+          const addResponse = await addLog(logData);
+          console.log('Add response:', addResponse);
+        }
+      } catch (error: any) {
+        console.error('Error updating database:', error);
+        if (error.response) {
+          console.error('Error response data:', error.response.data);
+          console.error('Error response status:', error.response.status);
+        }
+        // Show error to user but don't break the flow
       }
     }
   } catch (error) {
     console.error('Error in handleClick:', error);
+    // Handle the error appropriately (show to user, etc.)
   } finally {
+    clearTimeout(timeoutId);
+    isLoading.value = false;
+    loadingMessage.value = '';
     clickHandle = false;
   }
 }
@@ -533,5 +643,31 @@ const handleRetryConnection = async () => {
 
 .connection-status:hover .reload-icon:not(.spinning) {
   transform: rotate(90deg);
+}
+
+.loading-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  gap: 10px;
+}
+
+.loading-indicator svg {
+  width: 24px;
+  height: 24px;
+}
+
+.spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>

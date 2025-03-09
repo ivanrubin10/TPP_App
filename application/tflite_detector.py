@@ -4,13 +4,34 @@ import base64
 from tensorflow.lite.python.interpreter import Interpreter
 import traceback
 
-def tflite_detect_image(model_path, base64_image, labels, min_conf=0.5):
+def load_tflite_model(model_path):
+    """
+    Loads a TFLite model and returns the interpreter.
+    This function is separated to allow for model caching.
+    
+    Parameters:
+    - model_path: Path to the TFLite model file.
+    
+    Returns:
+    - interpreter: The loaded TFLite interpreter.
+    """
+    try:
+        print(f"Loading TFLite model from: {model_path}")
+        interpreter = Interpreter(model_path=model_path)
+        interpreter.allocate_tensors()
+        print("Model loaded successfully")
+        return interpreter
+    except Exception as e:
+        print(f"Error loading model: {str(e)}")
+        raise
+
+def tflite_detect_image(model_path_or_interpreter, base64_image, labels, min_conf=0.5):
     """
     Runs TFLite model on the given base64 encoded image and returns the image with detection results encoded as base64,
     along with a list of detected objects.
 
     Parameters:
-    - model_path: Path to the TFLite model file.
+    - model_path_or_interpreter: Path to the TFLite model file or a pre-loaded interpreter.
     - base64_image: The input image as a base64 encoded string.
     - labels: List of labels corresponding to the model's classes.
     - min_conf: Minimum confidence threshold for displaying detected objects.
@@ -35,15 +56,15 @@ def tflite_detect_image(model_path, base64_image, labels, min_conf=0.5):
             print(f"Error decoding image: {str(e)}")
             raise
 
-        # Load the TensorFlow Lite model into memory
-        try:
-            print(f"Loading TFLite model from: {model_path}")
-            interpreter = Interpreter(model_path=model_path)
-            interpreter.allocate_tensors()
-            print("Model loaded successfully")
-        except Exception as e:
-            print(f"Error loading model: {str(e)}")
-            raise
+        # Load the TensorFlow Lite model into memory if not already loaded
+        if isinstance(model_path_or_interpreter, str):
+            try:
+                interpreter = load_tflite_model(model_path_or_interpreter)
+            except Exception as e:
+                print(f"Error loading model: {str(e)}")
+                raise
+        else:
+            interpreter = model_path_or_interpreter
 
         # Get model details
         try:

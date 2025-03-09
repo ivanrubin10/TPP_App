@@ -7,6 +7,8 @@ interface BackendApi {
     resultImage: string;
     error?: string;
     gray_percentage?: number;
+    processing_time?: number;
+    skip_database_update?: boolean;
   }>;
   capturedImage: Ref<string>;
   detectedObjects: Ref<any[]>;

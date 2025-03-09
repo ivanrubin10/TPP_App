@@ -13,25 +13,25 @@ def detect_gray_percentage(base64_image):
         image_data = base64.b64decode(base64_image)
         np_arr = np.frombuffer(image_data, np.uint8)
         image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-        print(f"✓ Image decoded successfully")
+        print("[+] Image decoded successfully")
         print(f"  - Shape: {image.shape}")
         print(f"  - Size: {image.size} pixels")
         
         # Convert to HSV
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        print("✓ Converted image to HSV color space")
+        print("[+] Converted image to HSV color space")
         
         # Define gray range in HSV
         # Low saturation and medium-high value indicates gray
         lower_gray = np.array([0, 0, 50])
         upper_gray = np.array([180, 30, 220])
-        print("✓ HSV ranges for gray detection:")
+        print("[+] HSV ranges for gray detection:")
         print(f"  - Lower bound: H={lower_gray[0]}, S={lower_gray[1]}, V={lower_gray[2]}")
         print(f"  - Upper bound: H={upper_gray[0]}, S={upper_gray[1]}, V={upper_gray[2]}")
         
         # Create mask for gray pixels
         mask = cv2.inRange(hsv, lower_gray, upper_gray)
-        print("✓ Created gray pixel mask")
+        print("[+] Created gray pixel mask")
         
         # Calculate percentage of gray pixels
         total_pixels = mask.size

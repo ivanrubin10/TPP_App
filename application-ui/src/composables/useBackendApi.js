@@ -14,25 +14,39 @@ export function useBackendApi() {
       let url = `${baseUrl}/capture-image`
       
       // Add car parameters for ICS integration if provided
-      if (carParams) {
-        url += `?car_id=${carParams.car_id}&expected_part=${encodeURIComponent(carParams.expected_part)}&actual_part=${encodeURIComponent(carParams.actual_part)}`
+      if (carParams && carParams.car_id) {
+        console.log('Adding car parameters to capture request:', carParams);
+        url += `?car_id=${encodeURIComponent(carParams.car_id)}&expected_part=${encodeURIComponent(carParams.expected_part)}&actual_part=${encodeURIComponent(carParams.actual_part || '')}`
       }
       
+      console.log('Sending capture request to:', url);
       const response = await axios.get(url)
       const data = response.data
+      
+      if (data.error) {
+        console.warn('Capture endpoint returned error:', data.error);
+      }
+      
       capturedImage.value = `data:image/jpeg;base64,${data.image}`
-      detectedObjects.value = data.objects
+      detectedObjects.value = data.objects || []
       resultImage.value = `data:image/jpeg;base64,${data.result_image}`
+      
       return {
         image: `data:image/jpeg;base64,${data.image}`,
-        objects: data.objects,
+        objects: data.objects || [],
         resultImage: `data:image/jpeg;base64,${data.result_image}`,
         gray_percentage: data.gray_percentage,
-        error: data.error
+        error: data.error,
+        processing_time: data.processing_time,
+        skip_database_update: data.skip_database_update
       }
     } catch (error) {
-      console.error('Error capturing image:', error)
-      throw error
+      console.error('Error capturing image:', error);
+      if (error.response) {
+        console.error('Error response data:', error.response.data);
+        console.error('Error response status:', error.response.status);
+      }
+      throw error;
     }
   }
 
