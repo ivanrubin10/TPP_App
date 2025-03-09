@@ -4,6 +4,7 @@ import time
 import platform
 import sys
 import shutil
+import json
 
 def get_available_memory_mb():
     """Get available memory in MB"""
@@ -20,6 +21,38 @@ def get_available_memory_mb():
     except:
         # If we can't determine memory, return a conservative estimate
         return 1024  # Assume 1GB
+
+def fix_package_json_for_raspberry_pi():
+    """Modify package.json to work better on Raspberry Pi"""
+    try:
+        # Read the current package.json
+        with open('package.json', 'r') as f:
+            package_data = json.load(f)
+        
+        # Check if we need to modify the build script
+        if 'scripts' in package_data and 'build' in package_data['scripts']:
+            original_build = package_data['scripts']['build']
+            
+            # If the build script uses run-p, modify it
+            if 'run-p' in original_build:
+                print("Modifying package.json build script for Raspberry Pi compatibility...")
+                # Create a backup of the original package.json
+                shutil.copy('package.json', 'package.json.backup')
+                
+                # Replace run-p with a sequential approach
+                package_data['scripts']['build'] = 'npm run type-check && npm run build-only'
+                
+                # Write the modified package.json
+                with open('package.json', 'w') as f:
+                    json.dump(package_data, f, indent=2)
+                
+                print("Modified package.json to use a Raspberry Pi-friendly build script")
+                return True
+        
+        return False  # No changes needed
+    except Exception as e:
+        print(f"Warning: Could not modify package.json: {str(e)}")
+        return False
 
 def start_backend():
     print("Starting Flask backend...")
@@ -95,6 +128,10 @@ def start_frontend(dev_mode=True, skip_build=False):
                 
                 # Increase timeout for Raspberry Pi
                 build_timeout = 900  # 15 minutes
+                
+                # Fix package.json for Raspberry Pi if we're going to build
+                if should_build:
+                    fix_package_json_for_raspberry_pi()
             else:
                 build_env = dict(os.environ, PATH=os.environ['PATH'])
                 build_timeout = 300  # 5 minutes
@@ -111,7 +148,27 @@ def start_frontend(dev_mode=True, skip_build=False):
                         print("Reinstalling dependencies...")
                         subprocess.run('npm install --no-optional', shell=True, check=True)
                     
-                    # Build the frontend
+                    # First, ensure npm-run-all2 is installed
+                    print("Checking for npm-run-all2 package...")
+                    check_npm_run_all = subprocess.run(
+                        'npm list npm-run-all2 || npm list -g npm-run-all2',
+                        shell=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        universal_newlines=True
+                    )
+                    
+                    if "npm-run-all2" not in check_npm_run_all.stdout:
+                        print("Installing npm-run-all2 package...")
+                        subprocess.run(
+                            'npm install npm-run-all2 --no-save',
+                            shell=True,
+                            check=True,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT
+                        )
+                    
+                    # Try the normal build command
                     build_result = subprocess.run(
                         'npm run build',
                         shell=True,
@@ -121,6 +178,30 @@ def start_frontend(dev_mode=True, skip_build=False):
                         env=build_env,
                         timeout=build_timeout
                     )
+                    
+                    # Check if we got the "run-p: not found" error
+                    if build_result.returncode != 0 and "run-p: not found" in build_result.stdout:
+                        print("Detected 'run-p: not found' error. Using alternative build approach...")
+                        
+                        # Run the type-check and build-only commands separately
+                        print("Running type-check...")
+                        subprocess.run(
+                            'npm run type-check',
+                            shell=True,
+                            check=True,
+                            env=build_env
+                        )
+                        
+                        print("Running build-only...")
+                        build_result = subprocess.run(
+                            'npm run build-only',
+                            shell=True,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT,
+                            universal_newlines=True,
+                            env=build_env,
+                            timeout=build_timeout
+                        )
                     
                     if build_result.returncode != 0:
                         print("Error during build:")

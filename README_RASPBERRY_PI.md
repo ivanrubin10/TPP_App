@@ -86,6 +86,32 @@ If you prefer to start the components manually:
 
 ## Troubleshooting
 
+### "run-p: not found" Error
+
+If you encounter the error `sh: 1: run-p: not found` when building the frontend, this means the `npm-run-all2` package is missing or not properly installed. The updated `start_app.py` script should automatically handle this issue by:
+
+1. Installing the missing package
+2. Modifying the build script in package.json
+3. Using an alternative build approach if needed
+
+If you still encounter this error when using `start_app.py`, you can:
+
+1. Manually install the package:
+   ```
+   cd application-ui
+   npm install npm-run-all2
+   ```
+
+2. Manually modify the build script in `package.json`:
+   - Open `application-ui/package.json`
+   - Find the line with `"build": "run-p type-check \"build-only {@}\" --",`
+   - Replace it with `"build": "npm run type-check && npm run build-only",`
+
+3. Use the `--skip-build` option if you already have a built frontend:
+   ```
+   python start_app.py --skip-build
+   ```
+
 ### Memory Issues During Build
 
 The Raspberry Pi has limited memory, which can cause problems during the frontend build process. If you encounter memory-related errors:
