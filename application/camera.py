@@ -4,6 +4,8 @@ import os
 
 def capture_image():
     """Load and encode a test image from a specified path."""
+    # Commented out camera code
+    """
     try:
         # Get the absolute path of the current file's directory
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -37,8 +39,6 @@ def capture_image():
     except Exception as e:
         print(f"Error loading test image: {str(e)}")
         raise
-
-    # Commented out camera code
     """
     cap = None
     try:
@@ -71,4 +71,4 @@ def capture_image():
         # Always release the camera
         if cap is not None:
             cap.release()
-    """
+    
