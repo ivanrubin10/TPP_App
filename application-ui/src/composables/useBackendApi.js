@@ -9,7 +9,7 @@ export function useBackendApi() {
   const resultImage = ref('')
   const logs = ref([])
 
-   const captureImage = async (carParams) => {
+   const captureImage = async (carParams, reusePrevious = false) => {
     try {
       let url = `${baseUrl}/capture-image`
       
@@ -17,10 +17,20 @@ export function useBackendApi() {
       if (carParams && carParams.car_id) {
         console.log('Adding car parameters to capture request:', carParams);
         url += `?car_id=${encodeURIComponent(carParams.car_id)}&expected_part=${encodeURIComponent(carParams.expected_part)}&actual_part=${encodeURIComponent(carParams.actual_part || '')}`
+        
+        // Add reuse_previous parameter if requested
+        if (reusePrevious) {
+          url += `&reuse_previous=true`
+          console.log('Requesting to reuse previous detection results if available');
+        }
       }
       
       console.log('Sending capture request to:', url);
+      const startTime = performance.now();
       const response = await axios.get(url)
+      const endTime = performance.now();
+      console.log(`Capture request completed in ${(endTime - startTime).toFixed(2)}ms`);
+      
       const data = response.data
       
       if (data.error) {

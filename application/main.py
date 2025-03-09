@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from ics_integration import ICSIntegration
 import os
 from detect_gray import detect_gray_percentage
+import hashlib
+from functools import lru_cache
 
 
 app = Flask(__name__, static_folder='../application-ui', static_url_path='/')
@@ -35,6 +37,38 @@ model_cache = {
     'labels': None,
     'last_loaded': 0
 }
+
+# Add a detection result cache
+# This will store recent detection results to avoid redundant processing
+detection_cache = {}
+CACHE_TIMEOUT = 60  # Cache results for 60 seconds
+MAX_CACHE_SIZE = 50  # Maximum number of entries in the cache
+
+def clean_cache():
+    """Remove old entries from the detection cache to prevent memory leaks"""
+    global detection_cache
+    current_time = time.time()
+    # Find expired entries
+    expired_keys = [
+        key for key, entry in detection_cache.items() 
+        if current_time - entry['timestamp'] > CACHE_TIMEOUT
+    ]
+    # Remove expired entries
+    for key in expired_keys:
+        del detection_cache[key]
+        
+    # If cache is still too large, remove oldest entries
+    if len(detection_cache) > MAX_CACHE_SIZE:
+        # Sort by timestamp (oldest first)
+        sorted_entries = sorted(
+            detection_cache.items(), 
+            key=lambda x: x[1]['timestamp']
+        )
+        # Remove oldest entries until we're under the limit
+        for key, _ in sorted_entries[:len(detection_cache) - MAX_CACHE_SIZE]:
+            del detection_cache[key]
+    
+    print(f"Cache cleaned: {len(expired_keys)} expired entries removed, {len(detection_cache)} entries remaining")
 
 # Function to get or load the model and labels
 def get_model_and_labels():
@@ -474,12 +508,28 @@ def handle_retry_connection():
 def capture_and_detect():
     global config, capturing
     
+    # Clean the cache to remove old entries
+    clean_cache()
+    
     # Validate input parameters if they exist
     car_id = request.args.get('car_id')
     expected_part = request.args.get('expected_part')
     actual_part = request.args.get('actual_part')
+    reuse_previous = request.args.get('reuse_previous', 'false').lower() == 'true'
     
-    print(f"Capture request received with params: car_id={car_id}, expected_part={expected_part}, actual_part={actual_part}")
+    print(f"Capture request received with params: car_id={car_id}, expected_part={expected_part}, actual_part={actual_part}, reuse_previous={reuse_previous}")
+    
+    # Check if we should reuse the previous detection result for this car_id
+    if reuse_previous and car_id and car_id in detection_cache:
+        cache_entry = detection_cache[car_id]
+        cache_age = time.time() - cache_entry['timestamp']
+        
+        # Only use cache if it's fresh (less than CACHE_TIMEOUT seconds old)
+        if cache_age < CACHE_TIMEOUT:
+            print(f"Using cached detection result for car_id {car_id}, cache age: {cache_age:.2f} seconds")
+            return jsonify(cache_entry['result'])
+        else:
+            print(f"Cached result for car_id {car_id} is too old ({cache_age:.2f} seconds), performing new detection")
     
     # Check if we have partial parameters
     if any([car_id, expected_part, actual_part]) and not all([car_id, expected_part]):
@@ -515,27 +565,45 @@ def capture_and_detect():
             if gray_percentage < 60:
                 print("Not enough gray area detected in image")
                 # Still send the captured image to the frontend
-                return jsonify({
+                result = {
                     'image': image,  # Original image
                     'objects': [],
                     'result_image': image,  # Use original image as result image
                     'error': 'No hay capo',
                     'gray_percentage': float(gray_percentage),
                     'skip_database_update': True  # Flag to indicate frontend should not update database
-                })
+                }
+                
+                # Cache the result if we have a car_id
+                if car_id:
+                    detection_cache[car_id] = {
+                        'timestamp': time.time(),
+                        'result': result
+                    }
+                
+                return jsonify(result)
             
             # If gray percentage is high (>= 60%) and expected_part is 'Capo tipo 1',
             # we can skip the TFLite detection since we know it's a Capo tipo 1
             if expected_part == 'Capo tipo 1' and gray_percentage >= 60:
                 print("High gray percentage detected and expected part is Capo tipo 1. Skipping TFLite detection.")
-                return jsonify({
+                result = {
                     'image': image,  # Original image
                     'objects': [],  # No objects detected
                     'result_image': image,  # Use original image as result image
                     'gray_percentage': float(gray_percentage),
                     'processing_time': time.time() - start_time,
                     'is_capo_tipo_1': True  # Flag to indicate this is a Capo tipo 1
-                })
+                }
+                
+                # Cache the result if we have a car_id
+                if car_id:
+                    detection_cache[car_id] = {
+                        'timestamp': time.time(),
+                        'result': result
+                    }
+                
+                return jsonify(result)
                 
             # For all other cases with high gray percentage, we'll add a flag to indicate
             # this might be a Capo tipo 1 but still run detection to confirm
@@ -558,87 +626,44 @@ def capture_and_detect():
         try:
             # Time the object detection process
             detection_start = time.time()
-            
-            # If we have high gray percentage, we might be able to skip full detection
-            # and just do a quick check for objects
-            if high_gray_percentage:
-                # Use a higher confidence threshold for faster detection
-                higher_threshold = max(0.7, config.get('min_conf_threshold', 0.5))
-                print(f"Using higher confidence threshold ({higher_threshold}) for high gray percentage image")
-                result_image, detected_objects = tflite_detect_image(
-                    interpreter,
-                    image,
-                    labels,
-                    higher_threshold,
-                    early_exit=True  # Use early exit for high gray percentage images
-                )
-            else:
-                # Normal detection for other cases
-                result_image, detected_objects = tflite_detect_image(
-                    interpreter,
-                    image,
-                    labels,
-                    config.get('min_conf_threshold', 0.5),
-                    early_exit=False
-                )
-                
+            objects, result_image = tflite_detect_image(
+                interpreter, 
+                labels, 
+                image, 
+                min_conf_threshold=float(config.get('min_conf_threshold', 0.5)),
+                draw_boxes=True
+            )
             detection_time = time.time() - detection_start
-            print(f"Object detection completed in {detection_time:.2f} seconds. Found {len(detected_objects)} objects")
+            print(f"Object detection completed in {detection_time:.2f} seconds")
+            print(f"Detected {len(objects)} objects")
             
-            # If we have high gray percentage and no objects were detected,
-            # this is likely a Capo tipo 1
-            if high_gray_percentage and len(detected_objects) == 0:
-                print("High gray percentage and no objects detected: likely Capo tipo 1")
-                is_capo_tipo_1 = True
-            else:
-                is_capo_tipo_1 = False
-                
+            # Create the response
+            result = {
+                'image': image,
+                'objects': objects,
+                'result_image': result_image,
+                'gray_percentage': float(gray_percentage),
+                'processing_time': time.time() - start_time
+            }
+            
+            # If high gray percentage but no objects detected, this is likely a Capo tipo 1
+            if high_gray_percentage and len(objects) == 0:
+                result['is_capo_tipo_1'] = True
+            
+            # Cache the result if we have a car_id
+            if car_id:
+                detection_cache[car_id] = {
+                    'timestamp': time.time(),
+                    'result': result
+                }
+            
+            return jsonify(result)
         except Exception as e:
             print(f"Error during object detection: {str(e)}")
             print(f"Error type: {type(e)}")
             import traceback
             print(f"Detection error traceback: {traceback.format_exc()}")
             return jsonify({'error': f'Object detection failed: {str(e)}'}), 500
-        
-        # Return detection results
-        response_data = {
-            'image': image, 
-            'objects': detected_objects, 
-            'result_image': result_image,
-            'gray_percentage': float(gray_percentage),  # Ensure it's a float
-            'processing_time': time.time() - start_time,  # Add processing time for debugging
-            'is_capo_tipo_1': is_capo_tipo_1  # Add flag for Capo tipo 1
-        }
-        
-        # Log response data without the images
-        log_response = {
-            'objects': detected_objects,
-            'gray_percentage': float(gray_percentage),
-            'processing_time': time.time() - start_time
-        }
-        print(f"Detection results: {log_response}")
-        
-        # If this is a queued car and the result will be NG, send to ICS
-        if car_id and expected_part and actual_part:
-            # Only send to ICS if result is NG
-            if expected_part != actual_part:
-                try:
-                    print(f"Sending data to ICS for car_id: {car_id}")
-                    vin = ics.request_vin(car_id)
-                    if vin:
-                        ics.send_defect_data(
-                            vin=vin,
-                            image_base64=result_image,
-                            expected_part=expected_part,
-                            actual_part=actual_part
-                        )
-                        print("Data sent to ICS successfully")
-                except Exception as e:
-                    print(f"Error sending to ICS: {str(e)}")
-                    # Don't fail the whole request if ICS communication fails
-        
-        print(f"Capture and detect process completed in {time.time() - start_time:.2f} seconds")
-        return jsonify(response_data)
     except Exception as e:
         print(f"Error in capture and detect: {str(e)}")
         print(f"Error type: {type(e)}")
@@ -647,8 +672,8 @@ def capture_and_detect():
         print(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
     finally:
-        capturing = False  # Always reset the capturing flag
-        print(f"Capture flag reset after {time.time() - start_time:.2f} seconds")
+        capturing = False
+        print(f"Total processing time: {time.time() - start_time:.2f} seconds")
 
 @app.route('/check-car/<car_id>', methods=['GET'])
 def check_car(car_id):
