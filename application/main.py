@@ -603,12 +603,12 @@ def capture_and_detect():
         gray_percentage = calculate_gray_percentage(base64_image)
         print(f"Gray percentage: {gray_percentage:.2f}%")
         
-        # Skip detection if gray percentage is too high (likely no car present)
-        skip_detection = gray_percentage > 80
+        # Skip detection if gray percentage is too low (likely no car present)
+        skip_detection = gray_percentage < 60
         
         # Detect objects in the image
         if skip_detection:
-            print("Skipping detection due to high gray percentage")
+            print("Skipping detection due to low gray percentage")
             # Mark the image to indicate it's too gray
             result_image = mark_low_gray_percentage_image(base64_image, gray_percentage)
             detected_objects = []
