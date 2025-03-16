@@ -431,7 +431,7 @@ def handle_plc_response(plc_socket):
                             # Apply detection rules
                             if len(detected_objects) == 0:
                                 actual_part = "Capo tipo 1"
-                            elif agujeros_amorfos == 2:
+                            elif agujeros_amorfos >= 1:
                                 actual_part = "Capo tipo 2"
                             elif has_chico and has_mediano and has_grande:
                                 actual_part = "Capo tipo 3"
@@ -650,7 +650,7 @@ def capture_and_detect():
             # Apply detection rules
             if len(detected_objects) == 0:
                 actual_part = "Capo tipo 1"
-            elif agujeros_amorfos == 2:
+            elif agujeros_amorfos >= 1:
                 actual_part = "Capo tipo 2"
             elif has_chico and has_mediano and has_grande:
                 actual_part = "Capo tipo 3"
