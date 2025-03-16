@@ -291,6 +291,21 @@ def connect_to_galc():
     except Exception as e:
         print(f"GALC connection error: {e}")
 
+def send_plc_response(socket, is_good):
+    """
+    Send response byte to PLC based on detection result.
+    Args:
+        socket: The PLC socket connection
+        is_good (bool): True if detection result is GOOD, False if NOGOOD
+    """
+    try:
+        # Create response byte: 00000001 for GOOD, 00000010 for NOGOOD
+        response_byte = bytes([0b00000001]) if is_good else bytes([0b00000010])
+        socket.sendall(response_byte)
+        print(f"Sent response to PLC: {bin(response_byte[0])} ({'GOOD' if is_good else 'NOGOOD'})")
+    except Exception as e:
+        print(f"Error sending response to PLC: {str(e)}")
+
 def handle_plc_response(plc_socket):
     """Handle responses from the PLC socket."""
     plc_socket.settimeout(0.5)
@@ -416,6 +431,9 @@ def handle_plc_response(plc_socket):
                         # Determine outcome
                         outcome = "GOOD" if actual_part == expected_part else "NOGOOD"
                         
+                        # Send response to PLC based on outcome
+                        send_plc_response(plc_socket, outcome == "GOOD")
+                        
                         # Update car in database with complete results
                         car = CarLog.query.filter_by(car_id=car_id).first()
                         if car:
@@ -456,10 +474,14 @@ def handle_plc_response(plc_socket):
                                 'car_id': car_id,
                                 'error': str(e)
                             })
+                            # Send error response to PLC
+                            send_plc_response(plc_socket, False)  # Send NOGOOD in case of error
                 
                 except Exception as e:
                     print(f"Error processing new car: {str(e)}")
                     db.session.rollback()
+                    # Send error response to PLC
+                    send_plc_response(plc_socket, False)  # Send NOGOOD in case of error
             
         except socket.timeout:
             continue

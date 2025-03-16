@@ -114,52 +114,63 @@ def run_button_simulator(conn):
             # Add a small delay before showing the menu again
             time.sleep(0.5)
 
-def handle_client(conn, addr, interval, mode):
+def handle_client(conn, addr, interval, manual_mode):
+    """Handle a client connection."""
     print(f"Connected by {addr}")
-    
-    if mode == 'auto':
-        # Start a separate thread to send periodic messages
-        message_thread = threading.Thread(target=send_periodic_messages, args=(conn, interval), daemon=True)
-        message_thread.start()
-        print(f"Automatic message sending started with interval of {interval} seconds")
-    elif mode == 'manual':
-        print("Manual mode active. Press Enter to send a message, or type 'exit' to quit.")
-        print("You can also type '1', '2', or '3' to send a specific capot type.")
-        
-        # Start a thread to handle manual input
-        def manual_input_handler():
-            while True:
-                try:
-                    user_input = input().strip()
-                    if user_input.lower() == 'exit':
-                        print("Exiting...")
-                        sys.exit(0)
-                    elif user_input in ['1', '2', '3']:
-                        send_manual_message(conn, user_input)
-                    else:
-                        send_manual_message(conn)
-                except Exception as e:
-                    print(f"Error in manual input: {e}")
-                    break
-        
-        input_thread = threading.Thread(target=manual_input_handler, daemon=True)
-        input_thread.start()
-    elif mode == 'button':
-        # Run the button simulator in the main thread
-        run_button_simulator(conn)
-        return  # Exit after button simulator finishes
-    
-    # Receive and handle messages from the client
     try:
         while True:
-            data = conn.recv(1024)
-            if not data:
-                break
-            print(f"Received from client: {data.decode()}")
-
+            if manual_mode:
+                # In manual mode, wait for user input
+                print("\nPress Enter to send a message, or type a capot type (01, 05, 08) and press Enter:")
+                user_input = input()
+                
+                if user_input.lower() == 'exit':
+                    break
+                
+                # Send message based on user input
+                if user_input in ['01', '05', '08']:
+                    send_manual_message(conn, capot_type=user_input)
+                else:
+                    send_manual_message(conn)
+                
+                # Wait for response from server
+                try:
+                    response = conn.recv(1024)
+                    if response:
+                        response_byte = int.from_bytes(response, byteorder='big')
+                        if response_byte == 0b00000001:
+                            print("Received from server: 00000001 (GOOD)")
+                        elif response_byte == 0b00000010:
+                            print("Received from server: 00000010 (NOGOOD)")
+                        else:
+                            print(f"Received unknown response: {bin(response_byte)}")
+                except socket.timeout:
+                    print("No response received from server")
+            else:
+                # In automatic mode, send periodic messages
+                send_periodic_messages(conn, interval)
+                
+                # Wait for response from server
+                try:
+                    response = conn.recv(1024)
+                    if response:
+                        response_byte = int.from_bytes(response, byteorder='big')
+                        if response_byte == 0b00000001:
+                            print("Received from server: 00000001 (GOOD)")
+                        elif response_byte == 0b00000010:
+                            print("Received from server: 00000010 (NOGOOD)")
+                        else:
+                            print(f"Received unknown response: {bin(response_byte)}")
+                except socket.timeout:
+                    print("No response received from server")
+                
+                time.sleep(interval)
+    except ConnectionResetError:
+        print("Connection reset by server")
     except Exception as e:
-        print(f"Error handling client: {e}")
+        print(f"Error in client handler: {e}")
     finally:
+        print("Closing connection")
         conn.close()
 
 def start_fake_server(host='127.0.0.1', port=12345, interval=30, mode='auto'):
@@ -189,7 +200,7 @@ def start_fake_server(host='127.0.0.1', port=12345, interval=30, mode='auto'):
                 # Wait for a connection
                 conn, addr = server_socket.accept()
                 # Handle client in a separate thread
-                client_thread = threading.Thread(target=handle_client, args=(conn, addr, interval, mode), daemon=True)
+                client_thread = threading.Thread(target=handle_client, args=(conn, addr, interval, mode == 'manual'), daemon=True)
                 client_thread.start()
                 
                 # If in button mode, just handle one connection at a time
