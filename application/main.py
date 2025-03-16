@@ -467,19 +467,21 @@ def handle_plc_response(plc_socket):
                                     print(f"Detection complete. Found {len(detected_objects)} objects")
                                     
                                     # Count specific objects
-                                    has_amorfo = any(obj['class'].lower() == 'agujero amorfo' and obj['score'] > 0.5 for obj in detected_objects)
+                                    has_amorfo = any(obj['class'].lower() == 'amorfo' and obj['score'] > 0.5 for obj in detected_objects)
                                     has_chico = any(obj['class'].lower() == 'chico' and obj['score'] > 0.5 for obj in detected_objects)
                                     has_mediano = any(obj['class'].lower() == 'mediano' and obj['score'] > 0.5 for obj in detected_objects)
                                     has_grande = any(obj['class'].lower() == 'grande' and obj['score'] > 0.5 for obj in detected_objects)
                                     
                                     print("\n=== Detection Results ===")
+                                    print(f"Detected objects: {[obj['class'] for obj in detected_objects]}")
+                                    print(f"Scores: {[obj['score'] for obj in detected_objects]}")
                                     print(f"Amorfo detected: {has_amorfo}")
                                     print(f"Chico detected: {has_chico}")
                                     print(f"Mediano detected: {has_mediano}")
                                     print(f"Grande detected: {has_grande}")
                                     
                                     # Apply detection rules
-                                    if has_amorfo:
+                                    if any(obj['class'].lower() == 'amorfo' for obj in detected_objects):  # Changed condition
                                         actual_part = "Capo tipo 2"
                                         print("Classified as: Capo tipo 2 (has amorfo)")
                                     elif has_chico and has_mediano and has_grande:
@@ -491,6 +493,7 @@ def handle_plc_response(plc_socket):
                                     else:
                                         actual_part = "Capo no identificado"
                                         print("Classified as: Capo no identificado (ambiguous pattern)")
+                                        print("Detected objects:", [f"{obj['class']} (score: {obj['score']:.2f})" for obj in detected_objects])
                                 else:
                                     print("No capo detected - gray percentage below 60%")
                                     actual_part = "No hay capo"
@@ -727,7 +730,7 @@ def process_detection(image_base64, expected_part):
     )
     
     # Count specific objects
-    has_amorfo = any(obj['class'].lower() == 'agujero amorfo' and obj['score'] > 0.5 for obj in detected_objects)
+    has_amorfo = any(obj['class'].lower() == 'amorfo' and obj['score'] > 0.5 for obj in detected_objects)
     has_chico = any(obj['class'].lower() == 'chico' and obj['score'] > 0.5 for obj in detected_objects)
     has_mediano = any(obj['class'].lower() == 'mediano' and obj['score'] > 0.5 for obj in detected_objects)
     has_grande = any(obj['class'].lower() == 'grande' and obj['score'] > 0.5 for obj in detected_objects)
