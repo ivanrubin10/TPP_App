@@ -1,8 +1,14 @@
 <template>
     <div class="footer-container" ref="scrollableContainer" @mousedown="handleMouseDown" @wheel="handleWheel">
         <div class="footer-content" ref="footerContent">
-            <div class="footer-item" v-for="(item, index) in items" :key="index" :style="getItemStyle(index)"
-                @click="handleItemClick(index)">
+            <div 
+                v-for="(item, index) in items" 
+                :key="item.id" 
+                :class="['footer-item', {'is-selected': isItemSelected(item)}]"
+                :style="getItemStyle(index)"
+                @click="handleItemClick(index)"
+                :id="`footer-item-${item.id}`"
+            >
                 <div class="footer-item-content">
                     <div class="footer-item-header">
                         <span class="footer-item-header-name">Esperado: {{ item.expectedPart }}</span>
@@ -11,7 +17,7 @@
                     <img class="footer-item-image" src="@/assets/Car-2-icon.png" alt="Car Image">
                     <div class="footer-footer">
                         <span class="footer-item-header-id">{{ item.id }}</span>
-                        <span class="footer-item-body-date">{{ item.date }}</span>
+                        <span class="footer-item-body-date">{{ formatDate(item.date) }}</span>
                     </div>
                 </div>
             </div>
@@ -20,7 +26,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue';
 
 const props = defineProps({
     items: {
@@ -36,6 +42,7 @@ const props = defineProps({
     },
     modelValue: {
         type: Object,
+        default: null
     }
 });
 
@@ -77,13 +84,14 @@ const handleWheel = (e: WheelEvent) => {
     scrollableContainer.value.scrollLeft += e.deltaY;
 };
 
+function isItemSelected(item: any) {
+    return props.modelValue && props.modelValue.id === item.id;
+}
+
 function handleItemClick(index: number) {
-    emit('item-clicked', items.value[index]);
-    const itemsElements = document.querySelectorAll('.footer-item');
-    itemsElements.forEach((item) => {
-        item.classList.remove('is-selected');
-    });
-    itemsElements[index].classList.add('is-selected');
+    const clickedItem = items.value[index];
+    console.log('Footer item clicked:', clickedItem);
+    emit('item-clicked', clickedItem);
 }
 
 function getItemStyle(index: number) {
@@ -98,8 +106,67 @@ function getItemStyle(index: number) {
     return { backgroundColor: 'var(--bg-300)' };
 }
 
+// Method to programmatically highlight a car in the footer and scroll to it
+function highlightItem(itemId: string) {
+    if (!itemId) return;
+    
+    // Wait for next DOM update
+    nextTick(() => {
+        // Find the item in the DOM
+        const itemElement = document.getElementById(`footer-item-${itemId}`);
+        if (itemElement) {
+            // Scroll the item into view
+            itemElement.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+        } else {
+            console.warn(`Could not find DOM element for item ${itemId}`);
+        }
+    });
+}
+
+// Watch for changes to the modelValue and highlight the selected item
+watch(() => props.modelValue, (newValue) => {
+    if (newValue) {
+        console.log('Model value changed in footer, highlighting item:', newValue.id);
+        highlightItem(newValue.id);
+    }
+}, { deep: true });
+
+// Watch for changes to the items array
+watch(() => props.items, (newItems) => {
+    items.value = newItems;
+    
+    // If modelValue is set, highlight the corresponding item
+    if (props.modelValue) {
+        nextTick(() => {
+            highlightItem(props.modelValue.id);
+        });
+    }
+}, { deep: true });
+
+// Add date formatting function
+function formatDate(dateStr: string) {
+    if (!dateStr) return '';
+    
+    // Date is already in the format "DD-MM-YYYY HH:mm:ss"
+    const [datePart, timePart] = dateStr.split(' ');
+    if (!timePart) return dateStr;
+    
+    // Extract hours and minutes from time
+    const [hours, minutes] = timePart.split(':');
+    
+    // Return formatted time
+    return `${hours}:${minutes}`;
+}
+
 onMounted(() => {
     document.addEventListener('mouseup', handleMouseUp);
+    
+    // On initial mount, highlight the selected item if any
+    if (props.modelValue) {
+        nextTick(() => {
+            highlightItem(props.modelValue.id);
+        });
+    }
 });
 
 onUnmounted(() => {

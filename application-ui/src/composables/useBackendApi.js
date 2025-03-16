@@ -11,45 +11,73 @@ export function useBackendApi() {
 
    const captureImage = async (carParams) => {
     try {
-      let url = `${baseUrl}/capture-image`
+      let url = `${baseUrl}/capture-image`;
       
-      // Add car parameters for ICS integration if provided
-      if (carParams && carParams.car_id) {
-        console.log('Adding car parameters to capture request:', carParams);
-        url += `?car_id=${encodeURIComponent(carParams.car_id)}&expected_part=${encodeURIComponent(carParams.expected_part)}&actual_part=${encodeURIComponent(carParams.actual_part || '')}`
-      }
+      // Add compression flag to request
+      const requestData = {
+        ...(carParams || {}),
+        compress_images: true,
+        _t: Date.now()
+      };
       
-      console.log('Sending capture request to:', url);
+      console.log('Sending capture request...');
       const startTime = performance.now();
-      const response = await axios.get(url)
+      
+      // Use AbortController with shorter timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      
+      const response = await axios({
+        method: 'POST',
+        url,
+        data: requestData,
+        signal: controller.signal,
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache'
+        },
+        timeout: 15000
+      });
+      
+      clearTimeout(timeoutId);
+      
       const endTime = performance.now();
       console.log(`Capture request completed in ${(endTime - startTime).toFixed(2)}ms`);
       
-      const data = response.data
+      const responseData = response.data;
       
-      if (data.error) {
-        console.warn('Capture endpoint returned error:', data.error);
+      if (responseData.error || responseData.warning) {
+        console.warn(responseData.error || responseData.warning);
       }
       
-      capturedImage.value = `data:image/jpeg;base64,${data.image}`
-      detectedObjects.value = data.objects || []
-      resultImage.value = `data:image/jpeg;base64,${data.result_image}`
+      // Update refs with base64 images directly
+      if (responseData.image) capturedImage.value = `data:image/jpeg;base64,${responseData.image}`;
+      if (responseData.result_image) resultImage.value = `data:image/jpeg;base64,${responseData.result_image}`;
+      if (responseData.objects?.length) detectedObjects.value = responseData.objects;
       
       return {
-        image: `data:image/jpeg;base64,${data.image}`,
-        objects: data.objects || [],
-        resultImage: `data:image/jpeg;base64,${data.result_image}`,
-        gray_percentage: data.gray_percentage,
-        error: data.error,
-        processing_time: data.processing_time,
-        skip_database_update: data.skip_database_update,
-        is_capo_tipo_1: data.is_capo_tipo_1
-      }
+        image: responseData.image ? `data:image/jpeg;base64,${responseData.image}` : null,
+        objects: responseData.objects || [],
+        resultImage: responseData.result_image ? `data:image/jpeg;base64,${responseData.result_image}` : null,
+        gray_percentage: responseData.gray_percentage,
+        error: responseData.error,
+        processing_time: responseData.processing_time,
+        skip_database_update: responseData.skip_database_update,
+        is_capo_tipo_1: responseData.is_capo_tipo_1,
+        using_placeholder: responseData.using_placeholder,
+        warning: responseData.warning,
+        hood_detected: responseData.objects?.some(obj => obj.class.toLowerCase().includes('capo') || obj.class.toLowerCase().includes('hood'))
+      };
     } catch (error) {
       console.error('Error capturing image:', error);
+      if (error.name === 'AbortError') {
+        throw new Error('La solicitud tardó demasiado tiempo en completarse');
+      }
       if (error.response) {
-        console.error('Error response data:', error.response.data);
-        console.error('Error response status:', error.response.status);
+        console.error('Error response:', error.response.status, error.response.data);
+        throw new Error(`Error del servidor: ${error.response.status}`);
       }
       throw error;
     }
@@ -78,16 +106,26 @@ export function useBackendApi() {
 
   const updateItem = async (item) => {
     try {
-      console.log('Starting update item request...');
+      console.log('Starting update item request with data:', {
+        ...item,
+        original_image: item.original_image ? '[IMAGE DATA]' : null,
+        result_image: item.result_image ? '[IMAGE DATA]' : null
+      });
       const startTime = performance.now();
       
       // Set a longer timeout for large image updates
-      const timeout = item.skip_image_update ? 10000 : 30000; // 10s for non-image updates, 30s for image updates
+      const timeout = item.skip_image_update ? 10000 : 30000;
+      
+      // Ensure all required fields are present
+      if (!item.car_id) {
+        throw new Error('Missing car_id in update data');
+      }
       
       const response = await axios.put(`${baseUrl}/update-item`, item, {
         timeout: timeout,
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
         }
       });
       
@@ -97,8 +135,14 @@ export function useBackendApi() {
       return response.data;
     } catch (error) {
       console.error('Error updating item:', error);
+      if (error.response) {
+        console.error('Server response:', error.response.status, error.response.data);
+      }
       if (error.code === 'ECONNABORTED') {
-        console.error('Request timed out. This might be due to large image data.');
+        throw new Error('La solicitud tardó demasiado tiempo en completarse');
+      }
+      if (error.response?.status === 404) {
+        throw new Error('No se encontró el coche en la base de datos');
       }
       throw error;
     }

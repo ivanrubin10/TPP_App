@@ -54,8 +54,8 @@
         expectedPart: item.expected_part,
         actualPart: item.actual_part,
         outcome: item.outcome,
-        image: item.original_image_path,
-        resultImage: item.result_image_path,
+        image: item.original_image,
+        resultImage: item.result_image,
         date: item.date
       } as Item));
     });

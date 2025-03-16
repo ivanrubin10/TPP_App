@@ -32,6 +32,20 @@ class ICSIntegration:
     def send_defect_data(self, vin, image_base64, expected_part, actual_part):
         """Send defect data to ICS system"""
         try:
+            # If image_base64 is a URL, fetch the image content
+            if isinstance(image_base64, str) and image_base64.startswith('http'):
+                try:
+                    response = requests.get(image_base64)
+                    response.raise_for_status()
+                    image_base64 = base64.b64encode(response.content).decode('utf-8')
+                except Exception as e:
+                    print(f"Error fetching image from URL: {e}")
+                    return False
+            
+            # Ensure image_base64 doesn't include the data:image prefix
+            if isinstance(image_base64, str) and ',' in image_base64:
+                image_base64 = image_base64.split(',')[1]
+            
             defect_data = {
                 "DeviceId": "EI_CAMARITA",
                 "CardId": "00.00.00.00.87.92.B4.1A",
@@ -40,7 +54,7 @@ class ICSIntegration:
                     {
                         "ToolId": "Capot",
                         "Discrepancy": "EQUIVOCADO/A",
-                        "Comment": f"es un capot tipo {actual_part[-1]}, debería ser tipo {expected_part[-1]}",
+                        "Comment": f"es un capot tipo {actual_part[-1] if actual_part else 'N/A'}, debería ser tipo {expected_part[-1] if expected_part else 'N/A'}",
                         "DefectImageString": image_base64
                     }
                 ],
@@ -49,18 +63,21 @@ class ICSIntegration:
                 ]
             }
 
+            print(f"Sending defect data to ICS for VIN: {vin}")
             headers = {"Content-Type": "application/json"}
             response = requests.post(
                 self.defect_url,
                 data=json.dumps(defect_data),
-                headers=headers
+                headers=headers,
+                timeout=30  # Add timeout
             )
 
             if response.status_code != 200:
                 print(f"Error sending defect data: {response.status_code}")
+                print(f"Response content: {response.text}")
                 return False
 
             return True
         except Exception as e:
-            print(f"Error sending defect data: {e}")
+            print(f"Error sending defect data: {str(e)}")
             return False 

@@ -1,15 +1,25 @@
 <template>
     <div class="inspection-results">
         <InspectionCard title="Imagen Resultante">
-            <OutcomeImage v-if="modelValue?.resultImage" :imageSrc="modelValue?.resultImage" />
+            <div v-if="modelValue?.warning" class="camera-warning">
+                <p class="warning-text">⚠️ {{ modelValue.warning }}</p>
+                <p class="warning-subtext">Se está utilizando una imagen de muestra</p>
+            </div>
+            <div v-else-if="modelValue?.using_placeholder" class="camera-warning">
+                <p class="warning-text">⚠️ No se pudo acceder a la cámara</p>
+                <p class="warning-subtext">Usando imagen de muestra para demostración</p>
+            </div>
+            <OutcomeImage v-if="modelValue?.resultImage" :imageSrc="modelValue.resultImage" />
+            <div v-else class="no-image">
+                <p>No hay imagen disponible</p>
+            </div>
         </InspectionCard>
         <InspectionCard class="status" title="Estado" :style="getOutcomeStyle(modelValue?.outcome)">
             <div class="outcome">
                 <br />
-                <p>Esperado: {{ modelValue?.expectedPart }}</p>
+                <p>Esperado: {{ modelValue?.expectedPart || 'No especificado' }}</p>
                 <br />
-                <p>Resultado: {{ modelValue?.actualPart }}</p>
-                <br />
+                <p>Resultado: {{ modelValue?.actualPart || 'Pendiente' }}</p>
             </div>
         </InspectionCard>
     </div>
@@ -31,6 +41,7 @@ const modelValue = ref(props.modelValue);
 watch(
     () => props.modelValue,
     (newValue) => {
+        console.log('InspectionResults received new value:', newValue);
         modelValue.value = newValue;
         if (newValue?.grayPercentage !== undefined) {
             console.log(`Gray percentage: ${newValue.grayPercentage.toFixed(2)}%`);
@@ -40,13 +51,14 @@ watch(
 );
 
 function getOutcomeStyle(outcome: string) {
-    if (outcome === 'success') {
+    if (!outcome) return 'background-color: var(--bg-300)';
+    
+    if (outcome === 'GOOD') {
         return 'background-image: linear-gradient(180deg, var(--good-100) 0%, var(--good-200) 100%)';
-    } else if (outcome === 'failure') {
+    } else if (outcome === 'NOGOOD') {
         return 'background-image: linear-gradient(180deg, var(--no-good-100) 0%, var(--no-good-200) 100%)';
-    } else {
-        return 'background-color: var(--bg-300)';
     }
+    return 'background-color: var(--bg-300)';
 }
 </script>
 
@@ -60,7 +72,9 @@ function getOutcomeStyle(outcome: string) {
     grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
     align-items: center;
     justify-items: center;
+    gap: 20px;
 }
+
 .status .outcome {
     height: 100%;
     padding-bottom: 8%;
@@ -76,6 +90,28 @@ function getOutcomeStyle(outcome: string) {
     align-items: start;
 }
 
+.camera-warning {
+    background-color: #fde1e1;
+    border: 2px solid #ff6b6b;
+    border-radius: 8px;
+    padding: 15px;
+    margin: 10px 5px 20px 5px;
+    text-align: center;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.warning-text {
+    color: #d32f2f;
+    font-weight: bold;
+    margin-bottom: 8px;
+    font-size: 1.1em;
+}
+
+.warning-subtext {
+    color: #616161;
+    font-size: 0.9em;
+}
+
 .error-text {
     color: var(--no-good-100);
 }
@@ -84,5 +120,15 @@ function getOutcomeStyle(outcome: string) {
     font-size: 0.8em;
     display: block;
     margin-top: 5px;
+}
+
+.no-image {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 200px;
+    background-color: var(--bg-200);
+    color: var(--text-200);
+    border-radius: 8px;
 }
 </style>

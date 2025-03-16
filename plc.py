@@ -7,24 +7,24 @@ import sys
 
 def send_manual_message(conn, capot_type=None):
     """Send a single message with an optional specified capot type"""
-    sequence = random.randint(100, 999)
-    body = f"A{random.randint(1000, 9999)}"
+    # Generate a random sequence number
+    sequence = random.randint(1000, 9999)
+    seq_str = f"{sequence:04d}"
     
     # Use specified capot type or random one
-    if capot_type not in ['01', '05', '08']:
-        capot = random.choice(['01', '05', '08'])
+    if capot_type not in ['1', '2', '3']:
+        capot = random.choice(['1', '2', '3'])
     else:
         capot = capot_type
     
-    # Construct the full message
-    message = f"{sequence}{body}{capot}"
+    # Construct the full message in expected format: SEQxxxxPNyWTzz
+    message = f"SEQ{seq_str}PN{capot}WT01"
     
     try:
         conn.sendall(message.encode())
         print(f"Sent manual PLC message: {message}")
-        print(f"  - Sequence: {sequence}")
-        print(f"  - Body: {body}")
-        print(f"  - Capot: {capot}")
+        print(f"  - Sequence: {seq_str}")
+        print(f"  - Capot type: {capot}")
         
         # Wait for response
         try:
@@ -35,9 +35,9 @@ def send_manual_message(conn, capot_type=None):
     except Exception as e:
         print(f"Error sending manual message: {e}")
 
-def send_periodic_messages(conn, interval=5):
+def send_periodic_messages(conn, interval=30):
     # Function to send periodic messages to the client
-    sequence = 100  # Starting sequence number
+    sequence = 1000  # Starting sequence number
     
     while True:
         try:
@@ -45,38 +45,86 @@ def send_periodic_messages(conn, interval=5):
             
             # Increment sequence number
             sequence += 1
+            seq_str = f"{sequence:04d}"  # Format as 4 digits
             
-            # Generate a random body (A1234 in the example)
-            body = f"A{random.randint(1000, 9999)}"
+            # Generate a random capot type (1, 2, or 3)
+            capot = random.choice(['1', '2', '3'])
             
-            # Generate a random capot type (01, 05, or 08)
-            capot = random.choice(['01', '05', '08'])
-            
-            # Construct the full message: Sequence + Body + Capot
-            message = f"{sequence}{body}{capot}"
+            # Construct the full message in expected format: SEQxxxxPNyWTzz
+            message = f"SEQ{seq_str}PN{capot}WT01"
             
             conn.sendall(message.encode())
             print(f"Sent PLC message: {message}")
-            print(f"  - Sequence: {sequence}")
-            print(f"  - Body: {body}")
-            print(f"  - Capot: {capot}")
+            print(f"  - Sequence: {seq_str}")
+            print(f"  - Capot type: {capot}")
             print(f"  - Next message in {interval} seconds")
             
         except Exception as e:
             print(f"Error sending message: {e}")
             break
 
-def handle_client(conn, addr, interval, manual_mode):
+def run_button_simulator(conn):
+    """Simulate button presses to send car messages"""
+    while True:
+        print("\n=== BUTTON SIMULATOR MODE ===")
+        print("Press keys to simulate button presses:")
+        print("1 - Send Capot Tipo 1")
+        print("2 - Send Capot Tipo 2")
+        print("3 - Send Capot Tipo 3")
+        print("q - Quit")
+        print("==============================\n")
+        
+        try:
+            # Wait for a key press
+            key = input("Press a button key (1/2/3/q): ")
+            
+            if key.lower() == 'q':
+                print("Exiting button simulator...")
+                break
+                
+            # Map key to capot type
+            if key in ['1', '2', '3']:
+                capot_type = key
+                print(f"Sending Capot Tipo {capot_type}...")
+                
+                # Increment sequence
+                if not hasattr(run_button_simulator, 'sequence'):
+                    run_button_simulator.sequence = 1000
+                run_button_simulator.sequence += 1
+                seq_str = f"{run_button_simulator.sequence:04d}"
+                
+                # Construct message in the format expected by the application: SEQxxxxPNyWTzz
+                message = f"SEQ{seq_str}PN{capot_type}WT01"
+                conn.sendall(message.encode())
+                
+                print(f"Button press sent: {message}")
+                print(f"  - Sequence: {seq_str}")
+                print(f"  - Capot type: {capot_type}")
+                
+                # Add a small delay before showing the menu again
+                time.sleep(0.5)
+            else:
+                print("Invalid key. Use 1, 2, 3, or q.")
+                
+        except Exception as e:
+            print(f"Error in button simulator: {str(e)}")
+            if "Broken pipe" in str(e) or "Connection reset" in str(e):
+                print("Connection to server lost. Exiting simulator.")
+                break
+            # Add a small delay before showing the menu again
+            time.sleep(0.5)
+
+def handle_client(conn, addr, interval, mode):
     print(f"Connected by {addr}")
     
-    # Start a separate thread to send periodic messages if not in manual mode
-    if not manual_mode:
+    if mode == 'auto':
+        # Start a separate thread to send periodic messages
         message_thread = threading.Thread(target=send_periodic_messages, args=(conn, interval), daemon=True)
         message_thread.start()
         print(f"Automatic message sending started with interval of {interval} seconds")
-    else:
+    elif mode == 'manual':
         print("Manual mode active. Press Enter to send a message, or type 'exit' to quit.")
-        print("You can also type '01', '05', or '08' to send a specific capot type.")
+        print("You can also type '1', '2', or '3' to send a specific capot type.")
         
         # Start a thread to handle manual input
         def manual_input_handler():
@@ -86,7 +134,7 @@ def handle_client(conn, addr, interval, manual_mode):
                     if user_input.lower() == 'exit':
                         print("Exiting...")
                         sys.exit(0)
-                    elif user_input in ['01', '05', '08']:
+                    elif user_input in ['1', '2', '3']:
                         send_manual_message(conn, user_input)
                     else:
                         send_manual_message(conn)
@@ -96,6 +144,10 @@ def handle_client(conn, addr, interval, manual_mode):
         
         input_thread = threading.Thread(target=manual_input_handler, daemon=True)
         input_thread.start()
+    elif mode == 'button':
+        # Run the button simulator in the main thread
+        run_button_simulator(conn)
+        return  # Exit after button simulator finishes
     
     # Receive and handle messages from the client
     try:
@@ -105,23 +157,27 @@ def handle_client(conn, addr, interval, manual_mode):
                 break
             print(f"Received from client: {data.decode()}")
 
-            # No need to send a response here as we're already responding in the message sending functions
     except Exception as e:
         print(f"Error handling client: {e}")
     finally:
         conn.close()
 
-def start_fake_server(host='127.0.0.1', port=12345, interval=5, manual_mode=False):
+def start_fake_server(host='127.0.0.1', port=12345, interval=30, mode='auto'):
     print(f"Starting fake PLC server on {host}:{port}")
-    if manual_mode:
-        print("Manual mode: You will need to trigger messages manually")
-    else:
+    
+    if mode == 'auto':
         print(f"Automatic mode: Messages will be sent every {interval} seconds")
+    elif mode == 'manual':
+        print("Manual mode: You will need to trigger messages manually")
+    elif mode == 'button':
+        print("Button simulator mode: Press keys to simulate button presses")
     
     while True:
         try:
             # Create a socket object
             server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            # Allow reuse of the address/port
+            server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             # Bind the socket to the IP and port
             server_socket.bind((host, port))
             
@@ -133,8 +189,12 @@ def start_fake_server(host='127.0.0.1', port=12345, interval=5, manual_mode=Fals
                 # Wait for a connection
                 conn, addr = server_socket.accept()
                 # Handle client in a separate thread
-                client_thread = threading.Thread(target=handle_client, args=(conn, addr, interval, manual_mode), daemon=True)
+                client_thread = threading.Thread(target=handle_client, args=(conn, addr, interval, mode), daemon=True)
                 client_thread.start()
+                
+                # If in button mode, just handle one connection at a time
+                if mode == 'button':
+                    client_thread.join()
 
         except Exception as e:
             print(f"Server error: {e}")
@@ -148,9 +208,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Fake PLC Server')
     parser.add_argument('--host', default='127.0.0.1', help='Host to bind to')
     parser.add_argument('--port', type=int, default=12345, help='Port to bind to')
-    parser.add_argument('--interval', type=int, default=5, help='Interval between messages in seconds')
-    parser.add_argument('--manual', action='store_true', help='Manual mode - send messages on demand')
+    parser.add_argument('--interval', type=int, default=30, help='Interval between messages in seconds')
+    parser.add_argument('--mode', choices=['auto', 'manual', 'button'], default='auto',
+                        help='Operation mode: auto (periodic messages), manual (type to send), or button (simulate buttons)')
     
     args = parser.parse_args()
     
-    start_fake_server(args.host, args.port, args.interval, args.manual)
+    # Start the server with the specified mode
+    start_fake_server(args.host, args.port, args.interval, args.mode)

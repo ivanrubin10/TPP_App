@@ -1,9 +1,8 @@
-import time
 from flask import Flask, jsonify, request, send_from_directory
 import socket
 import threading
 from flask_socketio import SocketIO, emit
-from camera import capture_image
+from camera import capture_image, create_placeholder_image
 from flask_cors import CORS
 from tflite_detector import tflite_detect_image, load_tflite_model
 from flask_sqlalchemy import SQLAlchemy
@@ -12,8 +11,17 @@ from marshmallow_sqlalchemy import SQLAlchemySchema, auto_field
 from dataclasses import dataclass
 from ics_integration import ICSIntegration
 import os
+import base64
+import json
+import time
 from detect_gray import detect_gray_percentage
-
+import cv2
+import numpy as np
+import logging
+import subprocess
+from datetime import datetime
+import uuid
+import requests
 
 app = Flask(__name__, static_folder='../application-ui', static_url_path='/')
 CORS(app)  # Allow specific frontend
@@ -36,44 +44,36 @@ model_cache = {
     'last_loaded': 0
 }
 
-# Function to get or load the model and labels
 def get_model_and_labels():
-    global model_cache
+    """
+    Load the TFLite model and labels for object detection.
     
-    # If model is not loaded or it's been more than 1 hour since last load
-    current_time = time.time()
-    if model_cache['interpreter'] is None or current_time - model_cache['last_loaded'] > 3600:
-        print("Loading model and labels into cache...")
-        try:
-            # Try with application path first, fallback to current directory
-            model_path = './application/detect.tflite'
-            label_path = './application/labelmap.txt'
-            
-            if not os.path.exists(model_path):
-                model_path = './detect.tflite'
-                
-            if not os.path.exists(label_path):
-                label_path = './labelmap.txt'
-            
-            # Load labels
-            with open(label_path, 'r') as f:
-                labels = [line.strip() for line in f.readlines()]
-            
-            # Load model
-            interpreter = load_tflite_model(model_path)
-            
-            # Update cache
-            model_cache['interpreter'] = interpreter
-            model_cache['labels'] = labels
-            model_cache['last_loaded'] = current_time
-            
-            print(f"Model and labels loaded successfully. Found {len(labels)} labels.")
-            return interpreter, labels
-        except Exception as e:
-            print(f"Error loading model/labels: {str(e)}")
-            raise
-    else:
-        return model_cache['interpreter'], model_cache['labels']
+    Returns:
+        tuple: (model, class_names)
+    """
+    print("Loading TFLite model and labels...")
+    # Try with application path first, fallback to current directory
+    model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'detect.tflite')
+    label_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'labelmap.txt')
+    
+    if not os.path.exists(model_path):
+        print(f"Model not found at {model_path}, trying current directory")
+        model_path = 'detect.tflite'
+        
+    if not os.path.exists(label_path):
+        print(f"Labels not found at {label_path}, trying current directory")
+        label_path = 'labelmap.txt'
+    
+    # Load labels
+    with open(label_path, 'r') as f:
+        class_names = [line.strip() for line in f.readlines()]
+        print(f"Loaded {len(class_names)} labels")
+    
+    # Load model using TFLite
+    model = load_tflite_model(model_path)
+    print("TFLite model loaded successfully")
+    
+    return model, class_names
 
 # Define CarLog model
 class CarLog(db.Model):
@@ -82,9 +82,10 @@ class CarLog(db.Model):
     date = db.Column(db.String(50), nullable=False)
     expected_part = db.Column(db.String(200), nullable=False)
     actual_part = db.Column(db.String(200), nullable=False)
-    original_image_path = db.Column(db.String(200), nullable=False)
-    result_image_path = db.Column(db.String(200), nullable=False)
+    original_image = db.Column(db.Text, nullable=False)  # Store base64 image directly
+    result_image = db.Column(db.Text, nullable=False)    # Store base64 image directly
     outcome = db.Column(db.String(200), nullable=False)
+    gray_percentage = db.Column(db.Float)
     
     # Add index for faster lookups
     __table_args__ = (
@@ -109,9 +110,10 @@ class CarLogSchema(SQLAlchemySchema):
     date = auto_field()
     expected_part = auto_field()
     actual_part = auto_field()
-    original_image_path = auto_field()
-    result_image_path = auto_field()
+    original_image = auto_field()
+    result_image = auto_field()
     outcome = auto_field()
+    gray_percentage = auto_field()
 
 class QueuedCarSchema(SQLAlchemySchema):
     class Meta:
@@ -131,7 +133,7 @@ queued_cars_schema = QueuedCarSchema(many=True)
 
 # Initialize the database tables
 with app.app_context():
-    db.create_all()
+    db.create_all()  # Create tables if they don't exist
 
 @dataclass
 class LastSentMessage:
@@ -288,121 +290,217 @@ def connect_to_galc():
     except Exception as e:
         print(f"GALC connection error: {e}")
 
-def handle_plc_response(conn):
-    global plc_connection, is_connected
-    
-    # Set a timeout to prevent blocking indefinitely
-    conn.settimeout(1.0)
+def handle_plc_response(plc_socket):
+    """
+    Handle responses from the PLC socket.
+    """
+    # Set timeout to prevent blocking indefinitely
+    plc_socket.settimeout(0.5)
     
     while True:
         try:
-            socketio.emit('connection_status', {'status': True if is_connected else False})
-            socketio.emit('connection_type', {'type': config['connection_type']})
-            
-            try:
-                # Receive data from the PLC
-                data = conn.recv(1024)
-                if not data:
-                    print("No data received from PLC, closing connection.")
-                    break
+            # Emit connection status and type to frontend
+            socketio.emit('connection_status', {
+                'service': 'PLC',
+                'status': 'Conectado'
+            })
+            socketio.emit('connection_type', {
+                'type': 'PLC'
+            })
 
-                # Decode the message
-                message = data.decode(errors='replace')
-                print(f"Received PLC data: {message}")
-                
-                # Parse the message format: SequenceBodyCapot (e.g., 123A123408)
-                if len(message) >= 10:  # Ensure message is at least 10 characters
-                    try:
-                        # Extract parts of the message
-                        sequence = message[:3]  # First 3 characters (e.g., 123)
-                        body = message[3:8]     # Next 5 characters (e.g., A1234)
-                        capot_type = message[8:10]  # Last 2 characters (e.g., 08)
-                        
-                        print(f"Parsed PLC message:")
-                        print(f"  - Sequence: {sequence}")
-                        print(f"  - Body: {body}")
-                        print(f"  - Capot: {capot_type}")
-                        
-                        # Map capot type to expected part
-                        expected_part = {
-                            "01": "Capo tipo 1",
-                            "05": "Capo tipo 2",
-                            "08": "Capo tipo 3"
-                        }.get(capot_type)
-                        
-                        if expected_part:
-                            # Generate a unique car ID
-                            car_id = f"PLC_{int(time.time())}_{capot_type}"
-                            current_date = time.strftime("%d-%m-%Y %H:%M:%S")
-                            
-                            # Emit the message to the frontend
-                            socketio.emit('plc_message', {'message': capot_type})
-                            
-                            # Create a new log entry directly (no queuing for PLC)
-                            new_log = CarLog(
-                                car_id=car_id,
-                                date=current_date,
-                                expected_part=expected_part,
-                                actual_part="",  # Will be filled after detection
-                                original_image_path="",  # Will be filled after detection
-                                result_image_path="",  # Will be filled after detection
-                                outcome=""  # Will be filled after detection
-                            )
-                            
-                            # Use application context for database operations
-                            with app.app_context():
-                                try:
-                                    db.session.add(new_log)
-                                    db.session.commit()
-                                    print(f"Added new PLC log entry with ID: {new_log.id}")
-                                    
-                                    # Create a dictionary for frontend notification
-                                    log_dict = {
-                                        'id': car_id,
-                                        'expectedPart': expected_part,
-                                        'actualPart': "",
-                                        'outcome': "",
-                                        'image': "",
-                                        'resultImage': "",
-                                        'date': current_date,
-                                        'isQueued': False
-                                    }
-                                    
-                                    # Notify frontend about new car
-                                    socketio.emit('new_car', log_dict)
-                                except Exception as e:
-                                    print(f"Error adding PLC log to database: {e}")
-                                    db.session.rollback()
-                        else:
-                            print(f"Unknown capot type: {capot_type}")
-                    except Exception as e:
-                        print(f"Error parsing PLC message: {e}")
-                else:
-                    print(f"Invalid PLC message format: {message}")
-                
-                # Send a response back to the PLC (can be customized based on processing result)
-                response = b"OK"
-                conn.sendall(response)
-                print(f"Sent PLC response: {response.decode()}")
-            except socket.timeout:
-                # This is normal, just continue the loop
-                continue
-            except ConnectionResetError:
-                print("Connection reset by PLC")
+            # Receive data
+            data = plc_socket.recv(1024)
+            if not data:
+                print("PLC disconnected")
+                socketio.emit('connection_status', {
+                    'service': 'PLC',
+                    'status': 'Desconectado'
+                })
                 break
-            except Exception as e:
-                print(f"Error handling PLC message: {e}")
-                # Don't break the loop for other exceptions, just continue
+
+            # Decode message from PLC
+            message = data.decode('UTF-8')
+            print(f"Received PLC message: {message}")
+            
+            # Message format should be at least 10 characters
+            if len(message) < 10:
+                print(f"Invalid message format: {message}")
                 continue
                 
-        except Exception as e:
-            print(f"Outer error in PLC handler: {e}")
-            break
+            # Parse the message
+            # Format: SEQxxxxPNyWTzz
+            sequence = message[3:7]  # 4 digits after SEQ
+            body = message[7:]       # Everything after sequence
+            capot_type = None
             
-    print("PLC connection handler terminated")
-    conn.close()
-    plc_connection = None  # Reset PLC connection
-    is_connected = False  # Update connection status
+            # Find the position of "PN" in the body
+            pn_pos = body.find("PN")
+            if pn_pos != -1 and pn_pos + 3 <= len(body):  # PN + one character
+                # Extract the capot type (1, 2, or 3)
+                capot_type = body[pn_pos + 2]
+            
+            # Map the capot type to an expected part
+            expected_part = None
+            if capot_type == "1":
+                expected_part = "Capo tipo 1"
+            elif capot_type == "2":
+                expected_part = "Capo tipo 2"
+            elif capot_type == "3":
+                expected_part = "Capo tipo 3"
+            else:
+                print(f"Unknown capot type: {capot_type}")
+                continue
+
+            # Create unique car ID
+            car_id = f"{sequence}-{body}"
+
+            # Get current timestamp in the desired format
+            current_time = time.strftime("%d-%m-%Y %H:%M:%S")
+
+            # Use application context for database operations
+            with app.app_context():
+                # Check if car already exists
+                existing_car = CarLog.query.filter_by(car_id=car_id).first()
+                if existing_car:
+                    print(f"Car {car_id} already exists in database, skipping")
+                    continue
+
+                # Create new car entry in database
+                new_car = CarLog(
+                    car_id=car_id,
+                    date=current_time,
+                    expected_part=expected_part,
+                    actual_part="Pendiente",
+                    original_image="",
+                    result_image="",
+                    outcome="Pendiente",
+                    gray_percentage=None
+                )
+                
+                try:
+                    db.session.add(new_car)
+                    db.session.commit()
+                    print(f"Added new car to database: {car_id}")
+                    
+                    # Notify frontend about new car
+                    socketio.emit('new_car', {
+                        'car_id': car_id,
+                        'date': current_time,
+                        'expected_part': expected_part
+                    })
+                    
+                    # Wait a second to ensure camera is ready
+                    time.sleep(1)
+                    
+                    # Capture and process image
+                    print(f"Starting detection for car {car_id}")
+                    try:
+                        # Capture image
+                        image_base64 = capture_image()
+                        if not image_base64:
+                            raise Exception("Failed to capture image")
+
+                        # Calculate gray percentage
+                        gray_percentage = calculate_gray_percentage(image_base64)
+                        
+                        # Process detection
+                        interpreter, labels = get_model_and_labels()
+                        result_image, detected_objects = tflite_detect_image(
+                            interpreter,
+                            image_base64,
+                            labels,
+                            min_conf=0.5
+                        )
+                        
+                        # Determine actual part based on detection
+                        hood_detected = any(obj['class'].lower().find('capo') != -1 or obj['class'].lower().find('hood') != -1 for obj in detected_objects)
+                        is_capo_tipo_1 = any(obj['class'].lower().find('tipo_1') != -1 for obj in detected_objects)
+                        
+                        if hood_detected:
+                            actual_part = "Capo tipo 1" if is_capo_tipo_1 else "Capo tipo 2"
+                        else:
+                            actual_part = "No hay capo"
+                        
+                        # Determine outcome
+                        outcome = "GOOD" if actual_part == expected_part else "NOGOOD"
+                        
+                        # Update car in database
+                        car = CarLog.query.filter_by(car_id=car_id).first()
+                        if car:
+                            car.actual_part = actual_part
+                            car.outcome = outcome
+                            car.original_image = image_base64
+                            car.result_image = result_image
+                            car.gray_percentage = gray_percentage
+                            db.session.commit()
+                            
+                            # Notify frontend to update
+                            socketio.emit('detection_complete', {
+                                'car_id': car_id,
+                                'actual_part': actual_part,
+                                'outcome': outcome,
+                                'original_image': image_base64,
+                                'result_image': result_image
+                            })
+                            
+                            print(f"Detection completed for car {car_id}: {outcome}")
+                            
+                            # If outcome is NOGOOD and a hood was detected, send to ICS
+                            if outcome == "NOGOOD" and hood_detected:
+                                print(f"Sending NOGOOD result to ICS for car {car_id}")
+                                # Get VIN from ICS
+                                vin = ics.request_vin(car_id)
+                                if vin:
+                                    # Send defect data to ICS
+                                    ics.send_defect_data(vin, image_base64, expected_part, actual_part)
+                        
+                    except Exception as e:
+                        print(f"Error during detection process: {str(e)}")
+                        # Update car with error status
+                        car = CarLog.query.filter_by(car_id=car_id).first()
+                        if car:
+                            car.actual_part = "Error en detección"
+                            car.outcome = "Error"
+                            db.session.commit()
+                            socketio.emit('detection_error', {
+                                'car_id': car_id,
+                                'error': str(e)
+                            })
+                
+                except Exception as e:
+                    print(f"Error processing new car: {str(e)}")
+                    db.session.rollback()
+            
+        except socket.timeout:
+            # This is normal - just means no new data
+            continue
+        except ConnectionResetError:
+            print("PLC connection reset")
+            socketio.emit('connection_status', {
+                'service': 'PLC',
+                'status': 'Desconectado'
+            })
+            break
+        except Exception as e:
+            print(f"Error in PLC handler: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            
+            # Try to emit connection status if there's an error
+            try:
+                socketio.emit('connection_status', {
+                    'service': 'PLC',
+                    'status': 'Error'
+                })
+            except:
+                pass
+            break
+    
+    # Close the socket when done
+    try:
+        plc_socket.close()
+    except:
+        pass
 
 def connect_to_plc():
     global client_socket, is_connected, plc_connection
@@ -470,139 +568,132 @@ def handle_retry_connection():
     retry_connection()
     return jsonify({'message': 'Retrying connection...'}), 200
 
-@app.route('/capture-image', methods=['GET'])
+@app.route("/capture-image", methods=['GET', 'POST'])
 def capture_and_detect():
-    global config, capturing
+    # Extract parameters from either GET or POST request
+    if request.method == 'POST':
+        data = request.get_json()
+        car_id = data.get('car_id', '')
+        expected_part = data.get('expected_part', '')
+        compress_images = data.get('compress_images', False)
+    else:
+        car_id = request.args.get('car_id', '')
+        expected_part = request.args.get('expected_part', '')
+        compress_images = request.args.get('compress_images', 'false').lower() == 'true'
     
-    # Validate input parameters if they exist
-    car_id = request.args.get('car_id')
-    expected_part = request.args.get('expected_part')
-    actual_part = request.args.get('actual_part')
+    print(f"Capture request received for car_id: {car_id}, expected_part: {expected_part}")
     
-    print(f"Capture request received with params: car_id={car_id}, expected_part={expected_part}, actual_part={actual_part}")
-    
-    # Check if we have partial parameters
-    if any([car_id, expected_part, actual_part]) and not all([car_id, expected_part]):
-        print("Incomplete car parameters provided")
-        return jsonify({'error': 'If providing car parameters, both car_id and expected_part must be provided'}), 400
-    
-    if capturing:
-        print("Another capture is in progress, returning 429")
-        return jsonify({'error': 'Another capture is in progress'}), 429  # Too Many Requests
-        
-    capturing = True
-    start_time = time.time()
+    # Capture image from camera
     try:
-        print("Starting capture process...")
-        try:
-            print("Calling capture_image()...")
-            image = capture_image()
-            if not image:
-                raise ValueError("No image data received from capture")
-            print("Image captured successfully!")
-        except Exception as e:
-            print(f"Error during image capture: {str(e)}")
-            print(f"Error type: {type(e)}")
-            import traceback
-            print(f"Capture error traceback: {traceback.format_exc()}")
-            return jsonify({'error': f'Image capture failed: {str(e)}'}), 500
-
-        # Check gray percentage before proceeding
-        try:
-            gray_percentage = detect_gray_percentage(image)
-            print(f"Gray percentage in image: {gray_percentage}%")
-            
-            if gray_percentage < 60:
-                print("Not enough gray area detected in image")
-                # Still send the captured image to the frontend
-                result = {
-                    'image': image,  # Original image
-                    'objects': [],
-                    'result_image': image,  # Use original image as result image
-                    'error': 'No hay capo',
-                    'gray_percentage': float(gray_percentage),
-                    'skip_database_update': True  # Flag to indicate frontend should not update database
-                }
-                
-                return jsonify(result)
-            
-            # If gray percentage is high (>= 60%) and expected_part is 'Capo tipo 1',
-            # we can skip the TFLite detection since we know it's a Capo tipo 1
-            if expected_part == 'Capo tipo 1' and gray_percentage >= 60:
-                print("High gray percentage detected and expected part is Capo tipo 1. Skipping TFLite detection.")
-                result = {
-                    'image': image,  # Original image
-                    'objects': [],  # No objects detected
-                    'result_image': image,  # Use original image as result image
-                    'gray_percentage': float(gray_percentage),
-                    'processing_time': time.time() - start_time,
-                    'is_capo_tipo_1': True  # Flag to indicate this is a Capo tipo 1
-                }
-                
-                return jsonify(result)
-                
-            # For all other cases with high gray percentage, we'll add a flag to indicate
-            # this might be a Capo tipo 1 but still run detection to confirm
-            high_gray_percentage = gray_percentage >= 60
-        except Exception as e:
-            print(f"Error during gray detection: {str(e)}")
-            print(f"Error type: {type(e)}")
-            import traceback
-            print(f"Gray detection error traceback: {traceback.format_exc()}")
-            return jsonify({'error': f'Gray detection failed: {str(e)}'}), 500
+        start_time = time.time()
+        base64_image = capture_image()
+        capture_time = time.time()
+        print(f"Image capture time: {(capture_time - start_time) * 1000:.2f}ms")
         
-        # Get cached model and labels
-        try:
-            interpreter, labels = get_model_and_labels()
-        except Exception as e:
-            print(f"Error getting model/labels: {str(e)}")
-            return jsonify({'error': f'Failed to load model or labels: {str(e)}'}), 500
-
-        print(f"Using confidence threshold: {config.get('min_conf_threshold', 0.5)}")
-        try:
-            # Time the object detection process
-            detection_start = time.time()
-            objects, result_image = tflite_detect_image(
-                interpreter, 
-                labels, 
-                image, 
-                min_conf_threshold=float(config.get('min_conf_threshold', 0.5)),
-                draw_boxes=True
-            )
-            detection_time = time.time() - detection_start
-            print(f"Object detection completed in {detection_time:.2f} seconds")
-            print(f"Detected {len(objects)} objects")
+        # Calculate gray percentage
+        gray_percentage = calculate_gray_percentage(base64_image)
+        print(f"Gray percentage: {gray_percentage:.2f}%")
+        
+        # Skip detection if gray percentage is too high (likely no car present)
+        skip_detection = gray_percentage > 80
+        
+        # Detect objects in the image
+        if skip_detection:
+            print("Skipping detection due to high gray percentage")
+            # Mark the image to indicate it's too gray
+            result_image = mark_low_gray_percentage_image(base64_image, gray_percentage)
+            detected_objects = []
+        else:
+            # Load model and labels
+            model, labels = get_model_and_labels()
             
-            # Create the response
-            result = {
-                'image': image,
-                'objects': objects,
+            # Perform detection
+            result_image, detected_objects = tflite_detect_image(
+                model, 
+                base64_image, 
+                labels, 
+                min_conf=0.5,
+                early_exit=False
+            )
+        
+        # Determine if it's a Capo Tipo 1
+        is_capo_tipo_1 = False
+        hood_detected = False
+        for obj in detected_objects:
+            if obj['class'] == 'Capo Tipo 1' and obj['score'] > 0.5:
+                is_capo_tipo_1 = True
+            if 'capo' in obj['class'].lower() and obj['score'] > 0.5:
+                hood_detected = True
+        
+        # Determine actual part based on detection
+        if detected_objects:
+            # Sort by confidence score
+            sorted_objects = sorted(detected_objects, key=lambda x: x['score'], reverse=True)
+            actual_part = sorted_objects[0]['class']
+        else:
+            actual_part = "No se detectó ninguna parte"
+        
+        # Determine outcome based on expected part and detection
+        if expected_part and actual_part:
+            if expected_part == 'Capo tipo 1':
+                outcome = "GOOD" if is_capo_tipo_1 else "NOGOOD"
+            else:
+                outcome = "NOGOOD" if is_capo_tipo_1 else "GOOD"
+        else:
+            outcome = "UNKNOWN"
+        
+        # Log the detection in the database if car_id is provided
+        if car_id:
+            # Create a dictionary with the data to log
+            log_data = {
+                'car_id': car_id,
+                'date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                'expected_part': expected_part,
+                'actual_part': actual_part,
+                'original_image': base64_image,
                 'result_image': result_image,
-                'gray_percentage': float(gray_percentage),
-                'processing_time': time.time() - start_time
+                'outcome': outcome,
+                'gray_percentage': gray_percentage
             }
             
-            # If high gray percentage but no objects detected, this is likely a Capo tipo 1
-            if high_gray_percentage and len(objects) == 0:
-                result['is_capo_tipo_1'] = True
+            # Check if this car already exists in the database
+            existing_car = CarLog.query.filter_by(car_id=car_id).first()
             
-            return jsonify(result)
-        except Exception as e:
-            print(f"Error during object detection: {str(e)}")
-            print(f"Error type: {type(e)}")
-            import traceback
-            print(f"Detection error traceback: {traceback.format_exc()}")
-            return jsonify({'error': f'Object detection failed: {str(e)}'}), 500
+            if existing_car:
+                # Update existing record
+                for key, value in log_data.items():
+                    setattr(existing_car, key, value)
+                db.session.commit()
+                print(f"Updated existing record for car_id: {car_id}")
+            else:
+                # Create new record
+                new_log = CarLog(**log_data)
+                db.session.add(new_log)
+                db.session.commit()
+                print(f"Created new record for car_id: {car_id}")
+        
+        # Calculate total processing time
+        end_time = time.time()
+        processing_time = (end_time - start_time) * 1000  # in milliseconds
+        
+        # Return the results
+        return jsonify({
+            'image': base64_image,
+            'objects': detected_objects,
+            'result_image': result_image,
+            'gray_percentage': gray_percentage,
+            'processing_time': processing_time,
+            'is_capo_tipo_1': is_capo_tipo_1,
+            'actual_part': actual_part,
+            'outcome': outcome,
+            'hood_detected': hood_detected,
+            'skip_database_update': False
+        })
+    
     except Exception as e:
-        print(f"Error in capture and detect: {str(e)}")
-        print(f"Error type: {type(e)}")
-        import traceback
-        print("Full traceback:")
-        print(traceback.format_exc())
+        print(f"Error in capture_and_detect: {str(e)}")
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
-    finally:
-        capturing = False
-        print(f"Total processing time: {time.time() - start_time:.2f} seconds")
 
 @app.route('/check-car/<car_id>', methods=['GET'])
 def check_car(car_id):
@@ -624,119 +715,82 @@ def check_car(car_id):
 
 @app.route('/update-item', methods=['PUT'])
 def update_item():
-    start_time = time.time()
+    """Update an existing log entry"""
     try:
-        print("Received request to update item")
         data = request.get_json()
-        # Create a copy of data without the image paths for logging
-        log_data = {k: v for k, v in data.items() if k not in ['original_image_path', 'result_image_path']}
-        print(f"Request data (excluding images): {log_data}")
         
-        # Check if we should skip image updates
-        skip_image_update = data.get('skip_image_update', False)
-        if skip_image_update:
-            print("Image update will be skipped based on request parameter")
+        # Validate car_id
+        if 'car_id' not in data or not data['car_id']:
+            return jsonify({'error': 'Missing car_id'}), 400
         
-        # Validate required fields
-        required_fields = ['car_id', 'expected_part', 'actual_part', 'outcome']
-        # Only require image paths if not skipping image update
-        if not skip_image_update:
-            required_fields.extend(['original_image_path', 'result_image_path'])
-            
-        for field in required_fields:
-            if field not in data or data[field] is None:
-                error_msg = f"Missing required field: {field}"
-                print(error_msg)
-                return jsonify({'error': error_msg}), 400
-        
-        query_start = time.time()
-        print(f"Looking for car with ID: {data['car_id']}")
+        # Find the car log
         car_log = CarLog.query.filter_by(car_id=data['car_id']).first()
-        query_time = time.time() - query_start
-        print(f"Database query completed in {query_time:.2f} seconds")
+        if not car_log:
+            return jsonify({'error': f"Car with ID {data['car_id']} not found"}), 404
         
-        if car_log:
-            print(f"Found car with ID: {car_log.id}, updating fields")
-            update_start = time.time()
-            
-            # Always update these fields
-            car_log.expected_part = data['expected_part']
-            car_log.actual_part = data['actual_part']
-            car_log.outcome = data['outcome']
-            
-            # Only update image paths if not skipping
-            if not skip_image_update and 'original_image_path' in data and 'result_image_path' in data:
-                print("Updating image paths")
-                car_log.original_image_path = data['original_image_path']
-                car_log.result_image_path = data['result_image_path']
-            else:
-                print("Skipping image path updates")
-            
-            try:
-                commit_start = time.time()
-                db.session.commit()
-                commit_time = time.time() - commit_start
-                print(f"Database commit completed in {commit_time:.2f} seconds")
-                update_time = time.time() - update_start
-                print(f"Update operation completed in {update_time:.2f} seconds")
-            except Exception as e:
-                db.session.rollback()
-                error_msg = f"Database error during commit: {str(e)}"
-                print(error_msg)
-                return jsonify({'error': error_msg}), 500
-            
-            # Convert the updated car log object to a dictionary
-            updated_log = {
-                'id': car_log.id,
-                'car_id': car_log.car_id,
-                'date': car_log.date,
-                'expected_part': car_log.expected_part,
-                'actual_part': car_log.actual_part,
-                'outcome': car_log.outcome,
-            }
-            
-            # Only include image paths in response if they were updated
-            if not skip_image_update:
-                updated_log['original_image_path'] = car_log.original_image_path
-                updated_log['result_image_path'] = car_log.result_image_path
-                
-            total_time = time.time() - start_time
-            print(f"Total update_item request completed in {total_time:.2f} seconds")
-            return jsonify(updated_log)
-        else:
-            error_msg = f"Car log not found for car_id: {data['car_id']}"
-            print(error_msg)
-            return jsonify({'error': error_msg}), 404
+        # Update fields
+        for key, value in data.items():
+            if hasattr(car_log, key) and key != 'id':
+                setattr(car_log, key, value)
+        
+        db.session.commit()
+        
+        # Return updated car log
+        car_log_schema = CarLogSchema()
+        return jsonify(car_log_schema.dump(car_log))
     except Exception as e:
-        error_msg = f"Error updating item: {str(e)}"
-        print(error_msg)
-        import traceback
-        print(traceback.format_exc())
-        return jsonify({'error': error_msg}), 500
+        print(f"Error updating item: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+def add_inspection_log(expected_part, actual_part, outcome, gray_percentage=None):
+    """
+    Add a new car inspection log to the database.
+    """
+    try:
+        # Create a unique car ID
+        car_id = f"AUTO_{int(time.time())}"
+        current_date = time.strftime("%d-%m-%Y %H:%M:%S")
+        
+        log = CarLog(
+            car_id=car_id,
+            date=current_date,
+            expected_part=expected_part,
+            actual_part=actual_part,
+            original_image="",  # Will be updated later
+            result_image="",    # Will be updated later
+            outcome=outcome,
+            gray_percentage=float(gray_percentage) if gray_percentage is not None else None
+        )
+        
+        db.session.add(log)
+        db.session.commit()
+        return log.id
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error adding log: {str(e)}")
+        raise
 
 @app.route('/log', methods=['POST'])
 def add_log():
+    """Add a new log entry"""
     try:
-        print("Received request to add log")
         data = request.get_json()
-        # Create a copy of data without the image paths for logging
-        log_data = {k: v for k, v in data.items() if k not in ['original_image_path', 'result_image_path']}
-        print(f"Request data (excluding images): {log_data}")
         
         # Validate required fields
-        required_fields = ['car_id', 'date', 'expected_part', 'actual_part', 'original_image_path', 'result_image_path', 'outcome']
+        required_fields = ['car_id', 'date', 'expected_part', 'actual_part', 'original_image', 'result_image', 'outcome']
         for field in required_fields:
-            if field not in data or not data[field]:
-                error_msg = f"Missing required field: {field}"
-                print(error_msg)
-                return jsonify({'error': error_msg}), 400
+            if field not in data:
+                return jsonify({'error': f'Missing required field: {field}'}), 400
         
         # Check if car_id already exists
         existing_log = CarLog.query.filter_by(car_id=data['car_id']).first()
         if existing_log:
-            error_msg = f"Car with ID {data['car_id']} already exists. Use update-item endpoint instead."
-            print(error_msg)
-            return jsonify({'error': error_msg}), 409  # Conflict
+            # Update existing log
+            for key, value in data.items():
+                if hasattr(existing_log, key):
+                    setattr(existing_log, key, value)
+            db.session.commit()
+            return jsonify({'message': 'Log updated successfully', 'id': existing_log.id})
         
         # Create new log
         new_log = CarLog(
@@ -744,42 +798,31 @@ def add_log():
             date=data['date'],
             expected_part=data['expected_part'],
             actual_part=data['actual_part'],
-            original_image_path=data['original_image_path'],
-            result_image_path=data['result_image_path'],
-            outcome=data['outcome']
+            original_image=data['original_image'],
+            result_image=data['result_image'],
+            outcome=data['outcome'],
+            gray_percentage=data.get('gray_percentage')
         )
         
-        print(f"Adding new log for car_id: {data['car_id']}")
         db.session.add(new_log)
         db.session.commit()
-        print(f"Successfully added log with ID: {new_log.id}")
         
-        # Convert the new log to a dictionary for JSON serialization
-        log_dict = {
-            'id': new_log.id,
-            'car_id': new_log.car_id,
-            'date': new_log.date,
-            'expected_part': new_log.expected_part,
-            'actual_part': new_log.actual_part,
-            'original_image_path': new_log.original_image_path,
-            'result_image_path': new_log.result_image_path,
-            'outcome': new_log.outcome,
-        }
-        
-        return jsonify(log_dict)
+        return jsonify({'message': 'Log added successfully', 'id': new_log.id})
     except Exception as e:
-        error_msg = f"Error adding log: {str(e)}"
-        print(error_msg)
-        import traceback
-        print(traceback.format_exc())
-        return jsonify({'error': error_msg}), 500
+        print(f"Error adding log: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/logs', methods=['GET'])
 def get_logs():
-    all_logs = CarLog.query.all()
-    result = car_logs_schema.dump(all_logs)
-    return jsonify(result)
+    """Get all logs"""
+    try:
+        logs = CarLog.query.all()
+        car_log_schema = CarLogSchema(many=True)
+        return jsonify(car_log_schema.dump(logs))
+    except Exception as e:
+        print(f"Error getting logs: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/config', methods=['GET', 'POST'])
 def handle_config():
@@ -878,6 +921,114 @@ def send_to_ics():
         return jsonify({'error': 'Could not get VIN'}), 400
     except Exception as e:
         print(f"Error in send_to_ics: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+def calculate_gray_percentage(base64_image):
+    """
+    Calculate the percentage of the image that is gray/white (for detecting presence of a capot).
+    
+    Args:
+        base64_image (str): Base64 encoded image string
+        
+    Returns:
+        float: Percentage of pixels that are gray/white
+    """
+    try:
+        # Decode base64 image
+        if isinstance(base64_image, str) and ',' in base64_image:
+            base64_image = base64_image.split(',')[1]
+        
+        img_data = base64.b64decode(base64_image)
+        np_arr = np.frombuffer(img_data, np.uint8)
+        img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        
+        if img is None:
+            print("Failed to decode image in calculate_gray_percentage")
+            return 0.0
+        
+        # Convert to grayscale
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
+        # Apply a threshold to identify gray/white pixels
+        # Threshold value is chosen to isolate the light gray capot from darker background
+        threshold_value = 100  # Adjust if needed for your specific application
+        _, thresh = cv2.threshold(gray, threshold_value, 255, cv2.THRESH_BINARY)
+        
+        # Calculate percentage of white pixels
+        white_pixel_count = cv2.countNonZero(thresh)
+        total_pixels = thresh.shape[0] * thresh.shape[1]
+        percentage = (white_pixel_count / total_pixels) * 100
+        
+        return percentage
+    except Exception as e:
+        print(f"Error calculating gray percentage: {str(e)}")
+        return 0.0
+
+def mark_low_gray_percentage_image(base64_image, gray_percentage):
+    """
+    Add text to the image indicating low gray percentage.
+    
+    Args:
+        base64_image (str): Base64 encoded image string
+        gray_percentage (float): The calculated gray percentage
+        
+    Returns:
+        str: Base64 encoded image with text overlay
+    """
+    try:
+        # Decode base64 image
+        if isinstance(base64_image, str) and ',' in base64_image:
+            base64_image = base64_image.split(',')[1]
+        
+        img_data = base64.b64decode(base64_image)
+        np_arr = np.frombuffer(img_data, np.uint8)
+        img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        
+        if img is None:
+            print("Failed to decode image in mark_low_gray_percentage_image")
+            return base64_image
+        
+        # Get image dimensions
+        height, width = img.shape[:2]
+        
+        # Add semi-transparent overlay at the top
+        overlay = img.copy()
+        cv2.rectangle(overlay, (0, 0), (width, 120), (40, 40, 200), -1)
+        alpha = 0.7  # Transparency factor
+        cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0, img)
+        
+        # Add text with gray percentage
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        text = f"Porcentaje gris: {gray_percentage:.2f}% (Mínimo requerido: 60%)"
+        text_size = cv2.getTextSize(text, font, 0.8, 2)[0]
+        text_x = (width - text_size[0]) // 2
+        cv2.putText(img, text, (text_x, 40), font, 0.8, (255, 255, 255), 2)
+        
+        # Add explanation text
+        explanation = "Imagen demasiado oscura o mal iluminada"
+        expl_size = cv2.getTextSize(explanation, font, 0.8, 2)[0]
+        expl_x = (width - expl_size[0]) // 2
+        cv2.putText(img, explanation, (expl_x, 80), font, 0.8, (255, 255, 255), 2)
+        
+        # Encode back to base64
+        _, buffer = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        result_base64 = base64.b64encode(buffer).decode('utf-8')
+        
+        return result_base64
+    except Exception as e:
+        print(f"Error marking low gray percentage image: {str(e)}")
+        return base64_image
+
+@app.route('/reset-database', methods=['POST'])
+def reset_database():
+    """Reset and recreate database tables"""
+    try:
+        # Drop all tables
+        db.drop_all()
+        # Create all tables with new schema
+        db.create_all()
+        return jsonify({'message': 'Database reset successfully'})
+    except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
