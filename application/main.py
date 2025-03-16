@@ -427,14 +427,15 @@ def handle_plc_response(plc_socket):
                             has_chico = any(obj['class'].lower() == 'chico' and obj['score'] > 0.5 for obj in detected_objects)
                             has_mediano = any(obj['class'].lower() == 'mediano' and obj['score'] > 0.5 for obj in detected_objects)
                             has_grande = any(obj['class'].lower() == 'grande' and obj['score'] > 0.5 for obj in detected_objects)
+                            has_amorfo = any(obj['class'].lower() == 'agujero amorfo' and obj['score'] > 0.5 for obj in detected_objects)
                             
                             # Apply detection rules
-                            if len(detected_objects) == 0:
-                                actual_part = "Capo tipo 1"
-                            elif agujeros_amorfos >= 1:
+                            if has_amorfo:  # If any amorfo object is detected, it's tipo 2
                                 actual_part = "Capo tipo 2"
                             elif has_chico and has_mediano and has_grande:
                                 actual_part = "Capo tipo 3"
+                            elif len(detected_objects) == 0:
+                                actual_part = "Capo tipo 1"
                             else:
                                 actual_part = "Capo no identificado"
                         else:
@@ -646,14 +647,15 @@ def capture_and_detect():
             has_chico = any(obj['class'].lower() == 'chico' and obj['score'] > 0.5 for obj in detected_objects)
             has_mediano = any(obj['class'].lower() == 'mediano' and obj['score'] > 0.5 for obj in detected_objects)
             has_grande = any(obj['class'].lower() == 'grande' and obj['score'] > 0.5 for obj in detected_objects)
+            has_amorfo = any(obj['class'].lower() == 'agujero amorfo' and obj['score'] > 0.5 for obj in detected_objects)
             
             # Apply detection rules
-            if len(detected_objects) == 0:
-                actual_part = "Capo tipo 1"
-            elif agujeros_amorfos >= 1:
+            if has_amorfo:  # If any amorfo object is detected, it's tipo 2
                 actual_part = "Capo tipo 2"
             elif has_chico and has_mediano and has_grande:
                 actual_part = "Capo tipo 3"
+            elif len(detected_objects) == 0:
+                actual_part = "Capo tipo 1"
             else:
                 actual_part = "Capo no identificado"
         else:
@@ -724,8 +726,13 @@ def check_car(car_id):
         print(f"Checking if car exists with ID: {car_id}")
         car_log = CarLog.query.filter_by(car_id=car_id).first()
         if car_log:
-            print(f"Found car with ID: {car_log.id}")
-            return jsonify({'exists': True, 'car_log': car_log_schema.dump(car_log)})
+            print(f"Found car with ID: {car_log.id}, actual_part: {car_log.actual_part}, outcome: {car_log.outcome}")
+            result = car_log_schema.dump(car_log)
+            # Ensure we're returning complete data
+            result['actual_part'] = car_log.actual_part
+            result['outcome'] = car_log.outcome
+            result['gray_percentage'] = car_log.gray_percentage
+            return jsonify({'exists': True, 'car_log': result})
         else:
             print(f"No car found with ID: {car_id}")
             return jsonify({'exists': False})
@@ -741,6 +748,7 @@ def update_item():
     """Update an existing log entry"""
     try:
         data = request.get_json()
+        print(f"Updating item with data: {data}")
         
         # Validate car_id
         if 'car_id' not in data or not data['car_id']:
@@ -755,14 +763,20 @@ def update_item():
         for key, value in data.items():
             if hasattr(car_log, key) and key != 'id':
                 setattr(car_log, key, value)
+                print(f"Updated {key} to {value}")
         
         db.session.commit()
+        print(f"Database updated successfully for car_id: {data['car_id']}")
         
-        # Return updated car log
-        car_log_schema = CarLogSchema()
-        return jsonify(car_log_schema.dump(car_log))
+        # Return updated car log with complete data
+        result = car_log_schema.dump(car_log)
+        result['actual_part'] = car_log.actual_part
+        result['outcome'] = car_log.outcome
+        result['gray_percentage'] = car_log.gray_percentage
+        return jsonify(result)
     except Exception as e:
         print(f"Error updating item: {str(e)}")
+        db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
 def add_inspection_log(expected_part, actual_part, outcome, gray_percentage=None):
