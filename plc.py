@@ -215,6 +215,7 @@ def start_fake_server(host='127.0.0.1', port=12345, interval=5, mode='auto'):
                 # Wait for a connection
                 conn, addr = server_socket.accept()
                 conn.settimeout(1.0)  # Set timeout for receiving responses
+                print(f"Connected by {addr}")
                 
                 if mode == 'button':
                     # Run button simulator directly
@@ -228,7 +229,8 @@ def start_fake_server(host='127.0.0.1', port=12345, interval=5, mode='auto'):
                     )
                     client_thread.start()
                     
-                    if mode == 'button':
+                    # Wait for thread to finish in manual mode
+                    if mode == 'manual':
                         client_thread.join()
 
         except Exception as e:
