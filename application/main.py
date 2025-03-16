@@ -602,19 +602,84 @@ def connect_to_plc():
     if plc_connection is not None:
         print("Already connected to PLC. Ignoring new connection attempt.")
         return
-    
 
     host = config["plc_host"]
     port = config["plc_port"]
-
-    try:
-        conn = socket.create_connection((host, port))
-        client_socket = conn
-        plc_connection = conn
-        is_connected = True  # Update connection status
-        threading.Thread(target=handle_plc_response, args=(conn,), daemon=True).start()
-    except Exception as e:
-        print(f"PLC connection error: {e}")
+    
+    max_retries = 3
+    retry_delay = 2  # seconds
+    
+    for attempt in range(max_retries):
+        try:
+            print(f"\n=== PLC Connection Attempt {attempt + 1}/{max_retries} ===")
+            print(f"Trying to connect to PLC at {host}:{port}")
+            
+            # Create socket with timeout
+            conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            conn.settimeout(5)  # 5 second timeout for connection attempts
+            
+            # Attempt connection
+            conn.connect((host, port))
+            
+            print("Successfully connected to PLC")
+            client_socket = conn
+            plc_connection = conn
+            is_connected = True
+            
+            # Update frontend about successful connection
+            socketio.emit('connection_status', {
+                'service': 'PLC',
+                'status': 'Conectado',
+                'host': host,
+                'port': port
+            })
+            
+            # Start handler thread
+            threading.Thread(target=handle_plc_response, args=(conn,), daemon=True).start()
+            return True
+            
+        except socket.timeout:
+            error_msg = f"Connection attempt {attempt + 1} timed out"
+            print(error_msg)
+            socketio.emit('connection_status', {
+                'service': 'PLC',
+                'status': 'Error',
+                'error': error_msg
+            })
+            
+        except ConnectionRefusedError:
+            error_msg = f"Connection refused - Is the PLC simulator running at {host}:{port}?"
+            print(error_msg)
+            socketio.emit('connection_status', {
+                'service': 'PLC',
+                'status': 'Error',
+                'error': error_msg
+            })
+            
+        except Exception as e:
+            error_msg = f"Connection error: {str(e)}"
+            print(error_msg)
+            socketio.emit('connection_status', {
+                'service': 'PLC',
+                'status': 'Error',
+                'error': error_msg
+            })
+        
+        # Clean up failed connection attempt
+        try:
+            if 'conn' in locals():
+                conn.close()
+        except:
+            pass
+        
+        if attempt < max_retries - 1:  # Don't sleep after last attempt
+            print(f"Retrying in {retry_delay} seconds...")
+            time.sleep(retry_delay)
+    
+    print("\n=== PLC Connection Failed ===")
+    print(f"Could not connect to PLC at {host}:{port} after {max_retries} attempts")
+    is_connected = False
+    return False
 
 def retry_connection():
     global client_socket, is_connected, plc_connection, galc_connection
