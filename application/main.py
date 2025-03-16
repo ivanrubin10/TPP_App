@@ -309,7 +309,13 @@ def send_plc_response(socket, is_good):
 def handle_plc_response(plc_socket):
     """Handle responses from the PLC socket."""
     global is_connected, plc_connection
+    print("\n=== Starting PLC response handler ===")
+    print(f"Initial connection status: {is_connected}")
+    
     plc_socket.settimeout(0.5)
+    print("Socket timeout set to 0.5 seconds")
+    
+    message_count = 0
     
     while True:
         try:
@@ -317,33 +323,43 @@ def handle_plc_response(plc_socket):
                 print("Connection marked as disconnected, exiting handler")
                 break
 
+            print(f"\n--- Waiting for PLC message (count: {message_count}) ---")
             socketio.emit('connection_status', {'service': 'PLC', 'status': 'Conectado'})
             socketio.emit('connection_type', {'type': 'PLC'})
 
             try:
+                print("Attempting to receive data from PLC...")
                 data = plc_socket.recv(1024)
+                
                 if not data:
-                    print("PLC disconnected (no data)")
+                    print("WARNING: Received empty data from PLC")
                     socketio.emit('connection_status', {'service': 'PLC', 'status': 'Desconectado'})
                     break
 
+                print(f"Raw data received from PLC: {data}")
                 message = data.decode('UTF-8')
-                print(f"Received PLC message: {message}")
+                print(f"Decoded PLC message: {message}")
+                message_count += 1
                 
                 if len(message) < 10:
-                    print(f"Invalid message format: {message}")
+                    print(f"WARNING: Invalid message format (too short): {message}")
                     continue
                 
                 # Extract sequence and part type from message
                 try:
+                    print("\n=== Parsing message ===")
                     sequence = message[3:7]  # Get the sequence number after "SEQ"
+                    print(f"Extracted sequence: {sequence}")
+                    
                     pn_pos = message.find("PN")  # Find the position of "PN"
+                    print(f"Found PN at position: {pn_pos}")
+                    
                     if pn_pos == -1:
-                        print("Invalid message format: PN not found")
+                        print("ERROR: Invalid message format: PN not found")
                         continue
                         
                     capot_type = message[pn_pos + 2]  # Get the number after "PN"
-                    print(f"Parsed message - Sequence: {sequence}, Capot Type: {capot_type}")
+                    print(f"Extracted capot type: {capot_type}")
                     
                     expected_part = {
                         "1": "Capo tipo 1",
@@ -352,19 +368,25 @@ def handle_plc_response(plc_socket):
                     }.get(capot_type)
                     
                     if not expected_part:
-                        print(f"Unknown capot type: {capot_type}")
+                        print(f"ERROR: Unknown capot type: {capot_type}")
                         continue
 
                     car_id = f"{sequence}-{message[pn_pos:]}"
                     current_time = time.strftime("%d-%m-%Y %H:%M:%S")
-                    print(f"Processing car_id: {car_id}, expected_part: {expected_part}")
+                    print(f"\n=== Processing car ===")
+                    print(f"Generated car_id: {car_id}")
+                    print(f"Expected part: {expected_part}")
+                    print(f"Timestamp: {current_time}")
 
                     with app.app_context():
+                        print("\n=== Database operations ===")
                         # Check if car already exists
-                        if CarLog.query.filter_by(car_id=car_id).first():
-                            print(f"Car {car_id} already exists in database, skipping")
+                        existing_car = CarLog.query.filter_by(car_id=car_id).first()
+                        if existing_car:
+                            print(f"WARNING: Car {car_id} already exists in database, skipping")
                             continue
 
+                        print("Creating new car entry...")
                         # Create initial car entry
                         new_car = CarLog(
                             car_id=car_id,
@@ -378,35 +400,38 @@ def handle_plc_response(plc_socket):
                         )
                         
                         try:
+                            print("Adding new car to database...")
                             db.session.add(new_car)
                             db.session.commit()
-                            print(f"Added new car to database: {car_id}")
+                            print(f"Successfully added car {car_id} to database")
                             
-                            # Notify frontend about new car
+                            print("Notifying frontend about new car...")
                             socketio.emit('new_car', {
                                 'car_id': car_id,
                                 'date': current_time,
                                 'expected_part': expected_part
                             })
                             
+                            print("Waiting for camera...")
                             time.sleep(1)  # Wait for camera
                             
-                            print(f"Starting detection for car {car_id}")
+                            print(f"\n=== Starting detection for car {car_id} ===")
                             try:
                                 # Get image based on configured source
+                                print(f"Image source configured as: {config['image_source']}")
                                 if config['image_source'] == 'camera':
-                                    print("Using camera to capture image")
+                                    print("Capturing image from camera...")
                                     image_base64 = capture_image()
                                 else:
-                                    print(f"Using sample image: {config['image_source']}")
+                                    print(f"Loading sample image: {config['image_source']}")
                                     image_base64 = load_sample_image(config['image_source'])
 
                                 if not image_base64:
                                     raise Exception("Failed to get image")
 
-                                # Calculate gray percentage
+                                print("Calculating gray percentage...")
                                 gray_percentage = calculate_gray_percentage(image_base64)
-                                print(f"Gray percentage: {gray_percentage:.2f}%")
+                                print(f"Gray percentage calculated: {gray_percentage:.2f}%")
                                 
                                 # Initialize variables
                                 actual_part = None
@@ -414,10 +439,12 @@ def handle_plc_response(plc_socket):
                                 result_image = image_base64  # Default to original image
                                 
                                 if gray_percentage >= 60:
+                                    print("Gray percentage >= 60%, proceeding with detection...")
                                     # Load model and labels
                                     model, labels = get_model_and_labels()
                                     
                                     # Perform detection
+                                    print("Running object detection...")
                                     result_image, detected_objects = tflite_detect_image(
                                         model, 
                                         image_base64, 
@@ -426,43 +453,61 @@ def handle_plc_response(plc_socket):
                                         early_exit=False
                                     )
                                     
+                                    print(f"Detection complete. Found {len(detected_objects)} objects")
+                                    
                                     # Count specific objects
                                     has_amorfo = any(obj['class'].lower() == 'agujero amorfo' and obj['score'] > 0.5 for obj in detected_objects)
                                     has_chico = any(obj['class'].lower() == 'chico' and obj['score'] > 0.5 for obj in detected_objects)
                                     has_mediano = any(obj['class'].lower() == 'mediano' and obj['score'] > 0.5 for obj in detected_objects)
                                     has_grande = any(obj['class'].lower() == 'grande' and obj['score'] > 0.5 for obj in detected_objects)
                                     
+                                    print("\n=== Detection Results ===")
+                                    print(f"Amorfo detected: {has_amorfo}")
+                                    print(f"Chico detected: {has_chico}")
+                                    print(f"Mediano detected: {has_mediano}")
+                                    print(f"Grande detected: {has_grande}")
+                                    
                                     # Apply detection rules
-                                    if has_amorfo:  # If any amorfo object is detected, it's tipo 2
+                                    if has_amorfo:
                                         actual_part = "Capo tipo 2"
+                                        print("Classified as: Capo tipo 2 (has amorfo)")
                                     elif has_chico and has_mediano and has_grande:
                                         actual_part = "Capo tipo 3"
+                                        print("Classified as: Capo tipo 3 (has all three holes)")
                                     elif len(detected_objects) == 0:
                                         actual_part = "Capo tipo 1"
+                                        print("Classified as: Capo tipo 1 (no holes detected)")
                                     else:
                                         actual_part = "Capo no identificado"
+                                        print("Classified as: Capo no identificado (ambiguous pattern)")
                                 else:
                                     print("No capo detected - gray percentage below 60%")
                                     actual_part = "No hay capo"
                                 
                                 # Determine outcome
                                 outcome = "GOOD" if actual_part == expected_part else "NOGOOD"
+                                print(f"\n=== Final Result ===")
+                                print(f"Expected part: {expected_part}")
+                                print(f"Actual part: {actual_part}")
+                                print(f"Outcome: {outcome}")
                                 
-                                # Send response to PLC based on outcome
+                                print("Sending response to PLC...")
                                 send_plc_response(plc_socket, outcome == "GOOD")
                                 
+                                print("\n=== Updating database ===")
                                 # Update car in database with complete results
                                 car = CarLog.query.filter_by(car_id=car_id).first()
                                 if car:
+                                    print(f"Updating car {car_id} with detection results...")
                                     car.actual_part = actual_part
                                     car.outcome = outcome
                                     car.original_image = image_base64
                                     car.result_image = result_image
                                     car.gray_percentage = gray_percentage
                                     db.session.commit()
-                                    print(f"Updated car in database with detection results: {car_id}")
+                                    print("Database update successful")
                                     
-                                    # Notify frontend with complete results
+                                    print("Notifying frontend with complete results...")
                                     socketio.emit('detection_complete', {
                                         'car_id': car_id,
                                         'actual_part': actual_part,
@@ -472,9 +517,8 @@ def handle_plc_response(plc_socket):
                                         'gray_percentage': gray_percentage
                                     })
                                     
-                                    print(f"Detection completed for car {car_id}: {outcome}")
+                                    print(f"Detection process completed for car {car_id}")
                                     
-                                    # If outcome is NOGOOD and a hood was detected, send to ICS
                                     if outcome == "NOGOOD" and 'capo' in actual_part.lower():
                                         print(f"Sending NOGOOD result to ICS for car {car_id}")
                                         vin = ics.request_vin(car_id)
@@ -482,7 +526,7 @@ def handle_plc_response(plc_socket):
                                             ics.send_defect_data(vin, image_base64, expected_part, actual_part)
                             
                             except Exception as e:
-                                print(f"Error during detection process: {str(e)}")
+                                print(f"ERROR during detection process: {str(e)}")
                                 car = CarLog.query.filter_by(car_id=car_id).first()
                                 if car:
                                     car.actual_part = "Error en detección"
@@ -492,26 +536,26 @@ def handle_plc_response(plc_socket):
                                         'car_id': car_id,
                                         'error': str(e)
                                     })
-                                    # Send error response to PLC
-                                    send_plc_response(plc_socket, False)  # Send NOGOOD in case of error
+                                    print("Sending NOGOOD response to PLC due to error")
+                                    send_plc_response(plc_socket, False)
                         
                         except Exception as e:
-                            print(f"Error processing new car: {str(e)}")
+                            print(f"ERROR processing new car: {str(e)}")
                             db.session.rollback()
-                            # Send error response to PLC
-                            send_plc_response(plc_socket, False)  # Send NOGOOD in case of error
+                            print("Sending NOGOOD response to PLC due to processing error")
+                            send_plc_response(plc_socket, False)
                 except Exception as e:
-                    print(f"Error parsing message: {str(e)}")
+                    print(f"ERROR parsing message: {str(e)}")
                     continue
             
             except socket.timeout:
                 continue
             except ConnectionResetError:
-                print("PLC connection reset")
+                print("ERROR: PLC connection reset")
                 socketio.emit('connection_status', {'service': 'PLC', 'status': 'Desconectado'})
                 break
             except Exception as e:
-                print(f"Error in PLC handler: {str(e)}")
+                print(f"ERROR in PLC handler: {str(e)}")
                 traceback.print_exc()
                 try:
                     socketio.emit('connection_status', {'service': 'PLC', 'status': 'Error'})
@@ -520,16 +564,19 @@ def handle_plc_response(plc_socket):
                 break
 
         except Exception as e:
-            print(f"Error in main PLC handler loop: {str(e)}")
+            print(f"ERROR in main PLC handler loop: {str(e)}")
             traceback.print_exc()
             break
     
+    print("\n=== PLC handler terminating ===")
+    print("Cleaning up connection...")
     is_connected = False
     plc_connection = None
     try:
         plc_socket.close()
+        print("Socket closed successfully")
     except:
-        pass
+        print("Error closing socket")
     print("PLC handler terminated")
 
 def connect_to_plc():
