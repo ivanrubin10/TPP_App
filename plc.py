@@ -97,20 +97,30 @@ def run_button_simulator(conn):
                 print(f"Button press sent: {message}")
                 print(f"  - Sequence: {seq_str}")
                 print(f"  - Capot type: {key}")
+                print("Waiting for detection result...")
                 
-                # Wait for response from server
-                try:
-                    response = conn.recv(1024)
-                    if response:
-                        response_byte = int.from_bytes(response, byteorder='big')
-                        if response_byte == 0b00000001:
-                            print("Received from server: 00000001 (GOOD)")
-                        elif response_byte == 0b00000010:
-                            print("Received from server: 00000010 (NOGOOD)")
+                # Wait for response from server with retries
+                max_retries = 10  # Try for about 10 seconds total
+                for attempt in range(max_retries):
+                    try:
+                        response = conn.recv(1024)
+                        if response:
+                            response_byte = int.from_bytes(response, byteorder='big')
+                            if response_byte == 0b00000001:
+                                print("Received from server: 00000001 (GOOD)")
+                                break
+                            elif response_byte == 0b00000010:
+                                print("Received from server: 00000010 (NOGOOD)")
+                                break
+                            else:
+                                print(f"Received unknown response: {bin(response_byte)}")
+                                break
+                    except socket.timeout:
+                        if attempt < max_retries - 1:  # Don't print on last attempt
+                            print(f"Waiting for response... ({attempt + 1}/{max_retries})")
+                            time.sleep(1)  # Wait a second before retrying
                         else:
-                            print(f"Received unknown response: {bin(response_byte)}")
-                except socket.timeout:
-                    print("No response received from server")
+                            print("No response received from server after 10 seconds")
             else:
                 print("Invalid key. Use 1, 2, 3, or q.")
                 
