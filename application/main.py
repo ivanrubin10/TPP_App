@@ -22,6 +22,7 @@ import subprocess
 from datetime import datetime
 import uuid
 import requests
+import traceback  # Add traceback import
 
 app = Flask(__name__, static_folder='../application-ui', static_url_path='/')
 CORS(app)  # Allow specific frontend
@@ -316,6 +317,7 @@ def handle_plc_response(plc_socket):
     print("Socket timeout set to 0.5 seconds")
     
     message_count = 0
+    processed_cars = set()  # Keep track of processed car IDs
     
     while True:
         try:
@@ -372,6 +374,12 @@ def handle_plc_response(plc_socket):
                         continue
 
                     car_id = f"{sequence}-{message[pn_pos:]}"
+                    
+                    # Check if we've already processed this car
+                    if car_id in processed_cars:
+                        print(f"WARNING: Car {car_id} has already been processed, skipping")
+                        continue
+                        
                     current_time = time.strftime("%d-%m-%Y %H:%M:%S")
                     print(f"\n=== Processing car ===")
                     print(f"Generated car_id: {car_id}")
@@ -380,29 +388,32 @@ def handle_plc_response(plc_socket):
 
                     with app.app_context():
                         print("\n=== Database operations ===")
-                        # Check if car already exists
-                        existing_car = CarLog.query.filter_by(car_id=car_id).first()
-                        if existing_car:
-                            print(f"WARNING: Car {car_id} already exists in database, skipping")
-                            continue
-
-                        print("Creating new car entry...")
-                        # Create initial car entry
-                        new_car = CarLog(
-                            car_id=car_id,
-                            date=current_time,
-                            expected_part=expected_part,
-                            actual_part="Pendiente",
-                            original_image="",
-                            result_image="",
-                            outcome="Pendiente",
-                            gray_percentage=None
-                        )
-                        
                         try:
-                            print("Adding new car to database...")
+                            # Check if car already exists using a single query with FOR UPDATE
+                            existing_car = db.session.query(CarLog).filter_by(car_id=car_id).with_for_update().first()
+                            
+                            if existing_car:
+                                print(f"WARNING: Car {car_id} already exists in database, skipping")
+                                processed_cars.add(car_id)  # Add to processed set
+                                db.session.rollback()  # Release the lock
+                                continue
+
+                            print("Creating new car entry...")
+                            # Create initial car entry
+                            new_car = CarLog(
+                                car_id=car_id,
+                                date=current_time,
+                                expected_part=expected_part,
+                                actual_part="Pendiente",
+                                original_image="",
+                                result_image="",
+                                outcome="Pendiente",
+                                gray_percentage=None
+                            )
+                            
                             db.session.add(new_car)
                             db.session.commit()
+                            processed_cars.add(car_id)  # Add to processed set
                             print(f"Successfully added car {car_id} to database")
                             
                             print("Notifying frontend about new car...")
@@ -540,18 +551,21 @@ def handle_plc_response(plc_socket):
                                     send_plc_response(plc_socket, False)
                         
                         except Exception as e:
-                            print(f"ERROR processing new car: {str(e)}")
+                            print(f"ERROR in database operation: {str(e)}")
+                            traceback.print_exc()
                             db.session.rollback()
-                            print("Sending NOGOOD response to PLC due to processing error")
-                            send_plc_response(plc_socket, False)
+                            continue
+                            
                 except Exception as e:
                     print(f"ERROR parsing message: {str(e)}")
+                    traceback.print_exc()
                     continue
             
             except socket.timeout:
                 continue
             except ConnectionResetError:
                 print("ERROR: PLC connection reset")
+                traceback.print_exc()
                 socketio.emit('connection_status', {'service': 'PLC', 'status': 'Desconectado'})
                 break
             except Exception as e:
@@ -870,7 +884,6 @@ def check_car(car_id):
     except Exception as e:
         error_msg = f"Error checking car: {str(e)}"
         print(error_msg)
-        import traceback
         print(traceback.format_exc())
         return jsonify({'error': error_msg}), 500
 
