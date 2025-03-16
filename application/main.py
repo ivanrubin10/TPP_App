@@ -318,6 +318,7 @@ def handle_plc_response(plc_socket):
     
     message_count = 0
     processed_cars = set()  # Keep track of processed car IDs
+    ics_timeout = 10  # Timeout for ICS operations in seconds
     
     while True:
         try:
@@ -506,39 +507,49 @@ def handle_plc_response(plc_socket):
                                 print(f"Outcome: {outcome}")
                                 
                                 print("Sending response to PLC...")
-                                send_plc_response(plc_socket, outcome == "GOOD")
+                                if outcome == "NOGOOD" and 'capo' in actual_part.lower():
+                                    print(f"Sending NOGOOD result to ICS for car {car_id}")
+                                    try:
+                                        # Set a timeout for ICS operations
+                                        start_time = time.time()
+                                        ics_success = False
+                                        
+                                        while time.time() - start_time < ics_timeout:
+                                            try:
+                                                vin = ics.request_vin(car_id)
+                                                if vin:
+                                                    print(f"Retrieved VIN for car_id {car_id}: {vin}")
+                                                    result = ics.send_defect_data(
+                                                        vin=vin,
+                                                        image_base64=image_base64,
+                                                        expected_part=expected_part,
+                                                        actual_part=actual_part
+                                                    )
+                                                    if result:
+                                                        print(f"Successfully sent defect data to ICS for car_id: {car_id}")
+                                                        ics_success = True
+                                                        break
+                                            except Exception as ics_error:
+                                                print(f"ICS communication error: {str(ics_error)}")
+                                                time.sleep(0.5)  # Brief pause before retry
+                                        
+                                        if not ics_success:
+                                            print(f"Failed to send data to ICS for car {car_id} after {ics_timeout} seconds")
+                                    except Exception as e:
+                                        print(f"Error in ICS communication: {str(e)}")
+                                    finally:
+                                        # Always send PLC response, regardless of ICS status
+                                        print("Sending PLC response after ICS attempt")
+                                        send_plc_response(plc_socket, False)
+                                else:
+                                    # Send PLC response for non-NOGOOD cases
+                                    print("Sending PLC response for non-NOGOOD case")
+                                    send_plc_response(plc_socket, outcome == "GOOD")
+
+                                # Mark car as processed after sending response
+                                processed_cars.add(car_id)
+                                print(f"Car {car_id} processing complete")
                                 
-                                print("\n=== Updating database ===")
-                                # Update car in database with complete results
-                                car = CarLog.query.filter_by(car_id=car_id).first()
-                                if car:
-                                    print(f"Updating car {car_id} with detection results...")
-                                    car.actual_part = actual_part
-                                    car.outcome = outcome
-                                    car.original_image = image_base64
-                                    car.result_image = result_image
-                                    car.gray_percentage = gray_percentage
-                                    db.session.commit()
-                                    print("Database update successful")
-                                    
-                                    print("Notifying frontend with complete results...")
-                                    socketio.emit('detection_complete', {
-                                        'car_id': car_id,
-                                        'actual_part': actual_part,
-                                        'outcome': outcome,
-                                        'original_image': image_base64,
-                                        'result_image': result_image,
-                                        'gray_percentage': gray_percentage
-                                    })
-                                    
-                                    print(f"Detection process completed for car {car_id}")
-                                    
-                                    if outcome == "NOGOOD" and 'capo' in actual_part.lower():
-                                        print(f"Sending NOGOOD result to ICS for car {car_id}")
-                                        vin = ics.request_vin(car_id)
-                                        if vin:
-                                            ics.send_defect_data(vin, image_base64, expected_part, actual_part)
-                            
                             except Exception as e:
                                 print(f"ERROR during detection process: {str(e)}")
                                 car = CarLog.query.filter_by(car_id=car_id).first()
@@ -550,8 +561,9 @@ def handle_plc_response(plc_socket):
                                         'car_id': car_id,
                                         'error': str(e)
                                     })
-                                    print("Sending NOGOOD response to PLC due to error")
-                                    send_plc_response(plc_socket, False)
+                                print("Sending NOGOOD response to PLC due to error")
+                                send_plc_response(plc_socket, False)
+                                processed_cars.add(car_id)  # Mark as processed even on error
                         
                         except Exception as e:
                             print(f"ERROR in database operation: {str(e)}")
