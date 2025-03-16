@@ -137,13 +137,6 @@ def run_button_simulator(conn):
     
     while True:
         try:
-            # Check if connection is still alive with a small message
-            try:
-                conn.sendall(b'\x00')  # Send null byte to test connection
-            except (ConnectionResetError, BrokenPipeError):
-                print("Connection lost to server")
-                break
-            
             # Wait for a key press
             key = input("Press a button key (1/2/3/q): ")
             
@@ -159,37 +152,42 @@ def run_button_simulator(conn):
                 
                 # Construct message in the format expected by the application: SEQxxxxPNyWTzz
                 message = f"SEQ{seq_str}PN{key}WT01"
-                conn.sendall(message.encode())
                 
-                print(f"Button press sent: {message}")
-                print(f"  - Sequence: {seq_str}")
-                print(f"  - Capot type: {key}")
-                print("Waiting for detection result...")
-                
-                # Wait for response with retries
-                max_retries = 20  # Try for about 20 seconds total
-                for attempt in range(max_retries):
-                    try:
-                        response = conn.recv(1024)
-                        if not response:  # Connection closed by remote end
-                            print("Connection closed by server")
-                            return
-                        response_byte = int.from_bytes(response, byteorder='big')
-                        if response_byte == 0b00000001:
-                            print("Received from server: 00000001 (GOOD)")
-                            break
-                        elif response_byte == 0b00000010:
-                            print("Received from server: 00000010 (NOGOOD)")
-                            break
-                        else:
-                            print(f"Received unknown response: {bin(response_byte)}")
-                            break
-                    except socket.timeout:
-                        if attempt < max_retries - 1:
-                            print(f"Waiting for response... ({attempt + 1}/{max_retries})")
-                            time.sleep(1)
-                        else:
-                            print("No response received after 20 seconds")
+                try:
+                    # Send the message
+                    conn.sendall(message.encode())
+                    print(f"Button press sent: {message}")
+                    print(f"  - Sequence: {seq_str}")
+                    print(f"  - Capot type: {key}")
+                    print("Waiting for detection result...")
+                    
+                    # Wait for response with retries
+                    max_retries = 20  # Try for about 20 seconds total
+                    for attempt in range(max_retries):
+                        try:
+                            response = conn.recv(1024)
+                            if not response:  # Connection closed by remote end
+                                print("Connection closed by server")
+                                return
+                            response_byte = int.from_bytes(response, byteorder='big')
+                            if response_byte == 0b00000001:
+                                print("Received from server: 00000001 (GOOD)")
+                                break
+                            elif response_byte == 0b00000010:
+                                print("Received from server: 00000010 (NOGOOD)")
+                                break
+                            else:
+                                print(f"Received unknown response: {bin(response_byte)}")
+                                break
+                        except socket.timeout:
+                            if attempt < max_retries - 1:
+                                print(f"Waiting for response... ({attempt + 1}/{max_retries})")
+                                time.sleep(1)
+                            else:
+                                print("No response received after 20 seconds")
+                except (ConnectionResetError, BrokenPipeError) as e:
+                    print(f"Connection lost while sending/receiving: {e}")
+                    return
             else:
                 print("Invalid key. Use 1, 2, 3, or q.")
                 
