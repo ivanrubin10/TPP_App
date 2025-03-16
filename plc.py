@@ -141,18 +141,71 @@ def run_button_simulator(conn):
     print("==============================\n")
     
     last_sequence = None
+    detection_in_progress = False
+    
+    def wait_for_response():
+        """Wait for response from server with timeout"""
+        max_retries = 20  # Try for about 20 seconds total
+        for attempt in range(max_retries):
+            try:
+                response = conn.recv(1024)
+                if not response:  # Connection closed by remote end
+                    print("\nConnection closed by server")
+                    return False
+                response_byte = int.from_bytes(response, byteorder='big')
+                if response_byte == 0b00000001:
+                    print("\nReceived from server: 00000001 (GOOD)")
+                    return True
+                elif response_byte == 0b00000010:
+                    print("\nReceived from server: 00000010 (NOGOOD)")
+                    return True
+                else:
+                    print(f"\nReceived unknown response: {bin(response_byte)}")
+                    return True
+            except socket.timeout:
+                if attempt < max_retries - 1:
+                    print(f"Waiting for response... ({attempt + 1}/{max_retries})", end='\r')
+                    time.sleep(1)
+                else:
+                    print("\nNo response received after 20 seconds")
+                    return False
+        return False
     
     while True:
         try:
-            # Wait for a key press
-            key = input("Press a button key (1/2/3/q): ")
+            if detection_in_progress:
+                print("\nDetection in progress... Please wait.", end='\r')
+                time.sleep(0.5)
+                continue
+                
+            print("\nReady for next car. Press a button key (1/2/3/q): ", end='', flush=True)
+            
+            # Check if there's any pending response before accepting new input
+            try:
+                conn.settimeout(0.1)  # Quick check for pending data
+                pending = conn.recv(1024)
+                if pending:
+                    print("\nReceived unexpected response, clearing buffer...")
+                    continue
+            except socket.timeout:
+                # No pending data, proceed normally
+                conn.settimeout(2.0)  # Reset timeout to normal
+            except Exception:
+                # Ignore other errors and proceed
+                pass
+            
+            # Wait for user input
+            key = input()
             
             if key.lower() == 'q':
-                print("Exiting button simulator...")
+                print("\nExiting button simulator...")
                 break
                 
             # Map key to capot type
             if key in ['1', '2', '3']:
+                detection_in_progress = True
+                print("\nStarting detection process...")
+                
                 # Generate unique sequence
                 sequence = generate_unique_sequence()
                 while sequence == last_sequence:  # Ensure we don't repeat the last sequence
@@ -165,46 +218,32 @@ def run_button_simulator(conn):
                 try:
                     # Send the message
                     conn.sendall(message.encode())
-                    print(f"Button press sent: {message}")
+                    print(f"Message sent successfully:")
                     print(f"  - Sequence: {sequence}")
                     print(f"  - Capot type: {key}")
-                    print("Waiting for detection result...")
+                    print("\nWaiting for detection result...")
                     
-                    # Wait for response with retries
-                    max_retries = 20  # Try for about 20 seconds total
-                    for attempt in range(max_retries):
-                        try:
-                            response = conn.recv(1024)
-                            if not response:  # Connection closed by remote end
-                                print("Connection closed by server")
-                                return
-                            response_byte = int.from_bytes(response, byteorder='big')
-                            if response_byte == 0b00000001:
-                                print("Received from server: 00000001 (GOOD)")
-                                break
-                            elif response_byte == 0b00000010:
-                                print("Received from server: 00000010 (NOGOOD)")
-                                break
-                            else:
-                                print(f"Received unknown response: {bin(response_byte)}")
-                                break
-                        except socket.timeout:
-                            if attempt < max_retries - 1:
-                                print(f"Waiting for response... ({attempt + 1}/{max_retries})")
-                                time.sleep(1)
-                            else:
-                                print("No response received after 20 seconds")
+                    # Wait for response
+                    if wait_for_response():
+                        print("\nDetection completed successfully")
+                    else:
+                        print("\nDetection process failed or timed out")
+                    
                 except (ConnectionResetError, BrokenPipeError) as e:
-                    print(f"Connection lost while sending/receiving: {e}")
+                    print(f"\nConnection lost while sending/receiving: {e}")
                     return
+                finally:
+                    detection_in_progress = False
+                    print("\nSystem ready for next detection")
+                    time.sleep(1)  # Brief pause to show the ready message
             else:
-                print("Invalid key. Use 1, 2, 3, or q.")
+                print("\nInvalid key. Use 1, 2, 3, or q.")
                 
         except (ConnectionResetError, BrokenPipeError) as e:
-            print(f"Connection lost: {e}")
+            print(f"\nConnection lost: {e}")
             break
         except Exception as e:
-            print(f"Error in button simulator: {str(e)}")
+            print(f"\nError in button simulator: {str(e)}")
             break
     
     # Close the connection when done
