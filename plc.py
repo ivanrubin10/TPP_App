@@ -32,25 +32,32 @@ def send_manual_message(conn, capot_type=None):
         for attempt in range(max_retries):
             try:
                 data = conn.recv(1024)
-                if data:
-                    response_byte = int.from_bytes(data, byteorder='big')
-                    if response_byte == 0b00000001:
-                        print("Received from server: 00000001 (GOOD)")
-                        break
-                    elif response_byte == 0b00000010:
-                        print("Received from server: 00000010 (NOGOOD)")
-                        break
-                    else:
-                        print(f"Received unknown response: {bin(response_byte)}")
-                        break
+                if not data:  # Connection closed by remote end
+                    print("Connection closed by server")
+                    return False
+                response_byte = int.from_bytes(data, byteorder='big')
+                if response_byte == 0b00000001:
+                    print("Received from server: 00000001 (GOOD)")
+                    break
+                elif response_byte == 0b00000010:
+                    print("Received from server: 00000010 (NOGOOD)")
+                    break
+                else:
+                    print(f"Received unknown response: {bin(response_byte)}")
+                    break
             except socket.timeout:
                 if attempt < max_retries - 1:
                     print(f"Waiting for response... ({attempt + 1}/{max_retries})")
                     time.sleep(1)
                 else:
                     print("No response received after 20 seconds")
+        return True
+    except (ConnectionResetError, BrokenPipeError) as e:
+        print(f"Connection lost: {e}")
+        return False
     except Exception as e:
         print(f"Error sending manual message: {e}")
+        return False
 
 def send_periodic_messages(conn, interval=30):
     # Function to send periodic messages to the client
@@ -58,6 +65,13 @@ def send_periodic_messages(conn, interval=30):
     
     while True:
         try:
+            # Check if connection is still alive with a small message
+            try:
+                conn.sendall(b'\x00')  # Send null byte to test connection
+            except (ConnectionResetError, BrokenPipeError):
+                print("Connection lost to server")
+                return
+            
             # Increment sequence number
             sequence += 1
             seq_str = f"{sequence:04d}"  # Format as 4 digits
@@ -79,17 +93,19 @@ def send_periodic_messages(conn, interval=30):
             for attempt in range(max_retries):
                 try:
                     data = conn.recv(1024)
-                    if data:
-                        response_byte = int.from_bytes(data, byteorder='big')
-                        if response_byte == 0b00000001:
-                            print("Received from server: 00000001 (GOOD)")
-                            break
-                        elif response_byte == 0b00000010:
-                            print("Received from server: 00000010 (NOGOOD)")
-                            break
-                        else:
-                            print(f"Received unknown response: {bin(response_byte)}")
-                            break
+                    if not data:  # Connection closed by remote end
+                        print("Connection closed by server")
+                        return
+                    response_byte = int.from_bytes(data, byteorder='big')
+                    if response_byte == 0b00000001:
+                        print("Received from server: 00000001 (GOOD)")
+                        break
+                    elif response_byte == 0b00000010:
+                        print("Received from server: 00000010 (NOGOOD)")
+                        break
+                    else:
+                        print(f"Received unknown response: {bin(response_byte)}")
+                        break
                 except socket.timeout:
                     if attempt < max_retries - 1:
                         print(f"Waiting for response... ({attempt + 1}/{max_retries})")
@@ -100,9 +116,12 @@ def send_periodic_messages(conn, interval=30):
             print(f"Next message in {interval} seconds")
             time.sleep(interval)
             
+        except (ConnectionResetError, BrokenPipeError) as e:
+            print(f"Connection lost: {e}")
+            return
         except Exception as e:
             print(f"Error sending message: {e}")
-            break
+            return
 
 def run_button_simulator(conn):
     """Simulate button presses to send car messages"""
@@ -118,6 +137,13 @@ def run_button_simulator(conn):
     
     while True:
         try:
+            # Check if connection is still alive with a small message
+            try:
+                conn.sendall(b'\x00')  # Send null byte to test connection
+            except (ConnectionResetError, BrokenPipeError):
+                print("Connection lost to server")
+                break
+            
             # Wait for a key press
             key = input("Press a button key (1/2/3/q): ")
             
@@ -145,17 +171,19 @@ def run_button_simulator(conn):
                 for attempt in range(max_retries):
                     try:
                         response = conn.recv(1024)
-                        if response:
-                            response_byte = int.from_bytes(response, byteorder='big')
-                            if response_byte == 0b00000001:
-                                print("Received from server: 00000001 (GOOD)")
-                                break
-                            elif response_byte == 0b00000010:
-                                print("Received from server: 00000010 (NOGOOD)")
-                                break
-                            else:
-                                print(f"Received unknown response: {bin(response_byte)}")
-                                break
+                        if not data:  # Connection closed by remote end
+                            print("Connection closed by server")
+                            return
+                        response_byte = int.from_bytes(response, byteorder='big')
+                        if response_byte == 0b00000001:
+                            print("Received from server: 00000001 (GOOD)")
+                            break
+                        elif response_byte == 0b00000010:
+                            print("Received from server: 00000010 (NOGOOD)")
+                            break
+                        else:
+                            print(f"Received unknown response: {bin(response_byte)}")
+                            break
                     except socket.timeout:
                         if attempt < max_retries - 1:
                             print(f"Waiting for response... ({attempt + 1}/{max_retries})")
@@ -165,16 +193,18 @@ def run_button_simulator(conn):
             else:
                 print("Invalid key. Use 1, 2, 3, or q.")
                 
+        except (ConnectionResetError, BrokenPipeError) as e:
+            print(f"Connection lost: {e}")
+            break
         except Exception as e:
             print(f"Error in button simulator: {str(e)}")
-            if "Broken pipe" in str(e) or "Connection reset" in str(e):
-                print("Connection to server lost. Exiting simulator.")
-                break
-            time.sleep(0.5)
+            break
     
     # Close the connection when done
     try:
+        conn.shutdown(socket.SHUT_RDWR)
         conn.close()
+        print("Connection closed")
     except:
         pass
 
@@ -191,7 +221,8 @@ def handle_client(conn, addr, interval, manual_mode):
                     break
                 
                 # Send message based on user input
-                send_manual_message(conn, capot_type=user_input if user_input in ['1', '2', '3'] else None)
+                if not send_manual_message(conn, capot_type=user_input if user_input in ['1', '2', '3'] else None):
+                    break  # Break if connection is lost
         else:
             # In automatic mode, send periodic messages
             send_periodic_messages(conn, interval)
@@ -201,11 +232,16 @@ def handle_client(conn, addr, interval, manual_mode):
         print(f"Error in client handler: {e}")
     finally:
         print("Closing connection")
-        conn.close()
+        try:
+            conn.shutdown(socket.SHUT_RDWR)
+            conn.close()
+        except:
+            pass
 
 def start_fake_server(host='127.0.0.1', port=12345, interval=5, mode='auto'):
     """Start a fake PLC server that sends messages."""
     print(f"Starting fake PLC server on {host}:{port}")
+    server_socket = None
     
     if mode == 'auto':
         print(f"Automatic mode: Messages will be sent every {interval} seconds")
@@ -214,20 +250,20 @@ def start_fake_server(host='127.0.0.1', port=12345, interval=5, mode='auto'):
     elif mode == 'button':
         print("Button simulator mode: Press keys to simulate button presses")
     
-    while True:
-        try:
-            # Create a socket object
-            server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            # Allow reuse of the address/port
-            server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            # Bind the socket to the IP and port
-            server_socket.bind((host, port))
-            
-            # Start listening for incoming connections
-            server_socket.listen(1)
-            print(f"Fake PLC server listening on {host}:{port}")
+    try:
+        # Create a socket object
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # Allow reuse of the address/port
+        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # Bind the socket to the IP and port
+        server_socket.bind((host, port))
+        
+        # Start listening for incoming connections
+        server_socket.listen(1)
+        print(f"Fake PLC server listening on {host}:{port}")
 
-            while True:
+        while True:
+            try:
                 # Wait for a connection
                 conn, addr = server_socket.accept()
                 conn.settimeout(2.0)  # Set timeout for receiving responses to 2 seconds
@@ -249,12 +285,25 @@ def start_fake_server(host='127.0.0.1', port=12345, interval=5, mode='auto'):
                     if mode == 'manual':
                         client_thread.join()
 
-        except Exception as e:
-            print(f"Server error: {e}")
-            print("Restarting server in 5 seconds...")
-            time.sleep(5)
-        finally:
-            server_socket.close()
+            except KeyboardInterrupt:
+                print("\nServer shutdown requested")
+                break
+            except Exception as e:
+                print(f"Connection error: {e}")
+                print("Waiting for new connection...")
+                time.sleep(2)
+                
+    except KeyboardInterrupt:
+        print("\nServer shutdown requested")
+    except Exception as e:
+        print(f"Server error: {e}")
+    finally:
+        if server_socket:
+            try:
+                server_socket.close()
+                print("Server socket closed")
+            except:
+                pass
 
 if __name__ == '__main__':
     # Parse command line arguments
