@@ -405,8 +405,9 @@ def handle_plc_response(plc_socket):
                         gray_percentage = calculate_gray_percentage(image_base64)
                         
                         # Initialize variables
-                        actual_part = "No se detectó ninguna parte"
+                        actual_part = None
                         detected_objects = []
+                        result_image = image_base64  # Default to original image
                         
                         # Only proceed with detection if gray percentage indicates presence of a capo
                         if gray_percentage >= 60:
@@ -423,11 +424,10 @@ def handle_plc_response(plc_socket):
                             )
                             
                             # Count specific objects
-                            agujeros_amorfos = sum(1 for obj in detected_objects if obj['class'].lower() == 'agujero amorfo' and obj['score'] > 0.5)
+                            has_amorfo = any(obj['class'].lower() == 'agujero amorfo' and obj['score'] > 0.5 for obj in detected_objects)
                             has_chico = any(obj['class'].lower() == 'chico' and obj['score'] > 0.5 for obj in detected_objects)
                             has_mediano = any(obj['class'].lower() == 'mediano' and obj['score'] > 0.5 for obj in detected_objects)
                             has_grande = any(obj['class'].lower() == 'grande' and obj['score'] > 0.5 for obj in detected_objects)
-                            has_amorfo = any(obj['class'].lower() == 'agujero amorfo' and obj['score'] > 0.5 for obj in detected_objects)
                             
                             # Apply detection rules
                             if has_amorfo:  # If any amorfo object is detected, it's tipo 2
@@ -440,7 +440,6 @@ def handle_plc_response(plc_socket):
                                 actual_part = "Capo no identificado"
                         else:
                             print("No capo detected - gray percentage below 60%")
-                            result_image = mark_low_gray_percentage_image(image_base64, gray_percentage)
                             actual_part = "No hay capo"
                         
                         # Determine outcome
@@ -625,8 +624,9 @@ def capture_and_detect():
         print(f"Gray percentage: {gray_percentage:.2f}%")
         
         # Initialize variables
-        actual_part = "No se detectó ninguna parte"
+        actual_part = None
         detected_objects = []
+        result_image = base64_image  # Default to original image
         
         # Only proceed with detection if gray percentage indicates presence of a capo
         if gray_percentage >= 60:
@@ -643,11 +643,10 @@ def capture_and_detect():
             )
             
             # Count specific objects
-            agujeros_amorfos = sum(1 for obj in detected_objects if obj['class'].lower() == 'agujero amorfo' and obj['score'] > 0.5)
+            has_amorfo = any(obj['class'].lower() == 'agujero amorfo' and obj['score'] > 0.5 for obj in detected_objects)
             has_chico = any(obj['class'].lower() == 'chico' and obj['score'] > 0.5 for obj in detected_objects)
             has_mediano = any(obj['class'].lower() == 'mediano' and obj['score'] > 0.5 for obj in detected_objects)
             has_grande = any(obj['class'].lower() == 'grande' and obj['score'] > 0.5 for obj in detected_objects)
-            has_amorfo = any(obj['class'].lower() == 'agujero amorfo' and obj['score'] > 0.5 for obj in detected_objects)
             
             # Apply detection rules
             if has_amorfo:  # If any amorfo object is detected, it's tipo 2
@@ -660,7 +659,6 @@ def capture_and_detect():
                 actual_part = "Capo no identificado"
         else:
             print("No capo detected - gray percentage below 60%")
-            result_image = mark_low_gray_percentage_image(base64_image, gray_percentage)
             actual_part = "No hay capo"
         
         # Determine outcome based on expected part and detection
