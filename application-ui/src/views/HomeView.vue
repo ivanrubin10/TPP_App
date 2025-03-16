@@ -8,11 +8,6 @@
       </svg>
     </div>
     
-    <!-- Add image source selector -->
-    <div class="image-source-container">
-      <ImageSourceSelector v-model="imageSource" @update:modelValue="updateImageSource" />
-    </div>
-    
     <div class="container" v-if="selectedItem">
       <div class="inspection-header">
         <p>{{ selectedItem.id }}</p>
@@ -62,7 +57,6 @@ import InspectionResults from '../components/InspectionResults.vue'
 import { onBeforeUnmount, onMounted, ref, onUnmounted, nextTick } from 'vue';
 import socket from '../composables/socket';
 import axios from 'axios';
-import ImageSourceSelector from '../components/ImageSourceSelector.vue'
 
 const baseUrl = 'http://localhost:5000'
 
@@ -115,7 +109,6 @@ const isLoading = ref(false);
 const loadingMessage = ref('');
 const errorMessage = ref('');
 const activeDetectionCarId = ref<string | null>(null);
-const imageSource = ref<string>('default');
 
 const { 
   captureImage,
@@ -216,7 +209,7 @@ const triggerManualDetection = async (carId: string) => {
 };
 
 onMounted(async () => {
-  // Get initial config to set connection type and image source
+  // Get initial config to set connection type
   await loadConfig();
   const config = await getConfig();
   connectionType.value = config.connection_type;
@@ -840,25 +833,8 @@ const loadConfig = async () => {
   try {
     const config = await getConfig();
     console.log('Loaded configuration:', config);
-    imageSource.value = config.image_source || 'camera';
   } catch (error) {
     console.error('Error loading configuration:', error);
-  }
-};
-
-// Function to update the image source configuration
-const updateImageSource = async (newSource: string) => {
-  try {
-    console.log('Updating image source to:', newSource);
-    imageSource.value = newSource;
-    
-    // Save the configuration to the server
-    await saveConfig({ image_source: newSource });
-    console.log('Image source configuration saved successfully');
-  } catch (error) {
-    console.error('Error saving image source configuration:', error);
-    errorMessage.value = 'Error al guardar la configuración de la fuente de imagen';
-    setTimeout(() => errorMessage.value = '', 3000);
   }
 };
 </script>
@@ -1041,11 +1017,5 @@ const updateImageSource = async (newSource: string) => {
   box-shadow: 0 2px 8px rgba(0,0,0,0.2);
   text-align: center;
   font-weight: bold;
-}
-
-.image-source-container {
-  padding: 10px 70px;
-  background-color: var(--bg-200);
-  margin-bottom: 10px;
 }
 </style>

@@ -981,52 +981,17 @@ def calculate_gray_percentage(base64_image):
 
 def mark_low_gray_percentage_image(base64_image, gray_percentage):
     """
-    Add text to the image indicating it's too dark or poorly illuminated.
+    Return the original image without any modifications.
     
     Args:
         base64_image (str): Base64 encoded image string
-        gray_percentage (float): The calculated gray percentage (not displayed anymore)
+        gray_percentage (float): The calculated gray percentage (not used)
         
     Returns:
-        str: Base64 encoded image with text overlay
+        str: Original base64 encoded image string
     """
-    try:
-        # Decode base64 image
-        if isinstance(base64_image, str) and ',' in base64_image:
-            base64_image = base64_image.split(',')[1]
-        
-        img_data = base64.b64decode(base64_image)
-        np_arr = np.frombuffer(img_data, np.uint8)
-        img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-        
-        if img is None:
-            print("Failed to decode image in mark_low_gray_percentage_image")
-            return base64_image
-        
-        # Get image dimensions
-        height, width = img.shape[:2]
-        
-        # Add semi-transparent overlay at the top
-        overlay = img.copy()
-        cv2.rectangle(overlay, (0, 0), (width, 80), (40, 40, 200), -1)
-        alpha = 0.7  # Transparency factor
-        cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0, img)
-        
-        # Add explanation text
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        explanation = "Imagen demasiado oscura o mal iluminada"
-        expl_size = cv2.getTextSize(explanation, font, 0.8, 2)[0]
-        expl_x = (width - expl_size[0]) // 2
-        cv2.putText(img, explanation, (expl_x, 50), font, 0.8, (255, 255, 255), 2)
-        
-        # Encode back to base64
-        _, buffer = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 95])
-        result_base64 = base64.b64encode(buffer).decode('utf-8')
-        
-        return result_base64
-    except Exception as e:
-        print(f"Error marking low gray percentage image: {str(e)}")
-        return base64_image
+    # Simply return the original image without any modifications
+    return base64_image
 
 @app.route('/reset-database', methods=['POST'])
 def reset_database():
