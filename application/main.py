@@ -404,22 +404,42 @@ def handle_plc_response(plc_socket):
                         # Calculate gray percentage
                         gray_percentage = calculate_gray_percentage(image_base64)
                         
-                        # Process detection
-                        interpreter, labels = get_model_and_labels()
-                        result_image, detected_objects = tflite_detect_image(
-                            interpreter,
-                            image_base64,
-                            labels,
-                            min_conf=0.5
-                        )
+                        # Initialize variables
+                        actual_part = "No se detectó ninguna parte"
+                        detected_objects = []
                         
-                        # Determine actual part based on detection
-                        hood_detected = any(obj['class'].lower().find('capo') != -1 or obj['class'].lower().find('hood') != -1 for obj in detected_objects)
-                        is_capo_tipo_1 = any(obj['class'].lower().find('tipo_1') != -1 for obj in detected_objects)
-                        
-                        if hood_detected:
-                            actual_part = "Capo tipo 1" if is_capo_tipo_1 else "Capo tipo 2"
+                        # Only proceed with detection if gray percentage indicates presence of a capo
+                        if gray_percentage >= 60:
+                            # Load model and labels
+                            model, labels = get_model_and_labels()
+                            
+                            # Perform detection
+                            result_image, detected_objects = tflite_detect_image(
+                                model, 
+                                image_base64, 
+                                labels, 
+                                min_conf=0.5,
+                                early_exit=False
+                            )
+                            
+                            # Count specific objects
+                            agujeros_amorfos = sum(1 for obj in detected_objects if obj['class'].lower() == 'agujero amorfo' and obj['score'] > 0.5)
+                            has_chico = any(obj['class'].lower() == 'chico' and obj['score'] > 0.5 for obj in detected_objects)
+                            has_mediano = any(obj['class'].lower() == 'mediano' and obj['score'] > 0.5 for obj in detected_objects)
+                            has_grande = any(obj['class'].lower() == 'grande' and obj['score'] > 0.5 for obj in detected_objects)
+                            
+                            # Apply detection rules
+                            if len(detected_objects) == 0:
+                                actual_part = "Capo tipo 1"
+                            elif agujeros_amorfos == 2:
+                                actual_part = "Capo tipo 2"
+                            elif has_chico and has_mediano and has_grande:
+                                actual_part = "Capo tipo 3"
+                            else:
+                                actual_part = "Capo no identificado"
                         else:
+                            print("No capo detected - gray percentage below 60%")
+                            result_image = mark_low_gray_percentage_image(image_base64, gray_percentage)
                             actual_part = "No hay capo"
                         
                         # Determine outcome
@@ -447,7 +467,7 @@ def handle_plc_response(plc_socket):
                             print(f"Detection completed for car {car_id}: {outcome}")
                             
                             # If outcome is NOGOOD and a hood was detected, send to ICS
-                            if outcome == "NOGOOD" and hood_detected:
+                            if outcome == "NOGOOD" and 'capo' in actual_part.lower():
                                 print(f"Sending NOGOOD result to ICS for car {car_id}")
                                 # Get VIN from ICS
                                 vin = ics.request_vin(car_id)
@@ -603,16 +623,12 @@ def capture_and_detect():
         gray_percentage = calculate_gray_percentage(base64_image)
         print(f"Gray percentage: {gray_percentage:.2f}%")
         
-        # Skip detection if gray percentage is too low (likely no car present)
-        skip_detection = gray_percentage < 60
+        # Initialize variables
+        actual_part = "No se detectó ninguna parte"
+        detected_objects = []
         
-        # Detect objects in the image
-        if skip_detection:
-            print("Skipping detection due to low gray percentage")
-            # Mark the image to indicate it's too gray
-            result_image = mark_low_gray_percentage_image(base64_image, gray_percentage)
-            detected_objects = []
-        else:
+        # Only proceed with detection if gray percentage indicates presence of a capo
+        if gray_percentage >= 60:
             # Load model and labels
             model, labels = get_model_and_labels()
             
@@ -624,30 +640,30 @@ def capture_and_detect():
                 min_conf=0.5,
                 early_exit=False
             )
-        
-        # Determine if it's a Capo Tipo 1
-        is_capo_tipo_1 = False
-        hood_detected = False
-        for obj in detected_objects:
-            if obj['class'] == 'Capo Tipo 1' and obj['score'] > 0.5:
-                is_capo_tipo_1 = True
-            if 'capo' in obj['class'].lower() and obj['score'] > 0.5:
-                hood_detected = True
-        
-        # Determine actual part based on detection
-        if detected_objects:
-            # Sort by confidence score
-            sorted_objects = sorted(detected_objects, key=lambda x: x['score'], reverse=True)
-            actual_part = sorted_objects[0]['class']
+            
+            # Count specific objects
+            agujeros_amorfos = sum(1 for obj in detected_objects if obj['class'].lower() == 'agujero amorfo' and obj['score'] > 0.5)
+            has_chico = any(obj['class'].lower() == 'chico' and obj['score'] > 0.5 for obj in detected_objects)
+            has_mediano = any(obj['class'].lower() == 'mediano' and obj['score'] > 0.5 for obj in detected_objects)
+            has_grande = any(obj['class'].lower() == 'grande' and obj['score'] > 0.5 for obj in detected_objects)
+            
+            # Apply detection rules
+            if len(detected_objects) == 0:
+                actual_part = "Capo tipo 1"
+            elif agujeros_amorfos == 2:
+                actual_part = "Capo tipo 2"
+            elif has_chico and has_mediano and has_grande:
+                actual_part = "Capo tipo 3"
+            else:
+                actual_part = "Capo no identificado"
         else:
-            actual_part = "No se detectó ninguna parte"
+            print("No capo detected - gray percentage below 60%")
+            result_image = mark_low_gray_percentage_image(base64_image, gray_percentage)
+            actual_part = "No hay capo"
         
         # Determine outcome based on expected part and detection
         if expected_part and actual_part:
-            if expected_part == 'Capo tipo 1':
-                outcome = "GOOD" if is_capo_tipo_1 else "NOGOOD"
-            else:
-                outcome = "NOGOOD" if is_capo_tipo_1 else "GOOD"
+            outcome = "GOOD" if expected_part == actual_part else "NOGOOD"
         else:
             outcome = "UNKNOWN"
         
@@ -692,10 +708,8 @@ def capture_and_detect():
             'result_image': result_image,
             'gray_percentage': gray_percentage,
             'processing_time': processing_time,
-            'is_capo_tipo_1': is_capo_tipo_1,
             'actual_part': actual_part,
             'outcome': outcome,
-            'hood_detected': hood_detected,
             'skip_database_update': False
         })
     
