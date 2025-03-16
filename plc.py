@@ -25,13 +25,30 @@ def send_manual_message(conn, capot_type=None):
         print(f"Sent manual PLC message: {message}")
         print(f"  - Sequence: {seq_str}")
         print(f"  - Capot type: {capot}")
+        print("Waiting for detection result...")
         
-        # Wait for response
-        try:
-            data = conn.recv(1024)
-            print(f"Response from server: {data.decode()}")
-        except:
-            print("No response received")
+        # Wait for response with retries
+        max_retries = 20  # Try for about 20 seconds total
+        for attempt in range(max_retries):
+            try:
+                data = conn.recv(1024)
+                if data:
+                    response_byte = int.from_bytes(data, byteorder='big')
+                    if response_byte == 0b00000001:
+                        print("Received from server: 00000001 (GOOD)")
+                        break
+                    elif response_byte == 0b00000010:
+                        print("Received from server: 00000010 (NOGOOD)")
+                        break
+                    else:
+                        print(f"Received unknown response: {bin(response_byte)}")
+                        break
+            except socket.timeout:
+                if attempt < max_retries - 1:
+                    print(f"Waiting for response... ({attempt + 1}/{max_retries})")
+                    time.sleep(1)
+                else:
+                    print("No response received after 20 seconds")
     except Exception as e:
         print(f"Error sending manual message: {e}")
 
@@ -41,8 +58,6 @@ def send_periodic_messages(conn, interval=30):
     
     while True:
         try:
-            time.sleep(interval)  # Send a message every x seconds
-            
             # Increment sequence number
             sequence += 1
             seq_str = f"{sequence:04d}"  # Format as 4 digits
@@ -57,7 +72,33 @@ def send_periodic_messages(conn, interval=30):
             print(f"Sent PLC message: {message}")
             print(f"  - Sequence: {seq_str}")
             print(f"  - Capot type: {capot}")
-            print(f"  - Next message in {interval} seconds")
+            print("Waiting for detection result...")
+            
+            # Wait for response with retries
+            max_retries = 20  # Try for about 20 seconds total
+            for attempt in range(max_retries):
+                try:
+                    data = conn.recv(1024)
+                    if data:
+                        response_byte = int.from_bytes(data, byteorder='big')
+                        if response_byte == 0b00000001:
+                            print("Received from server: 00000001 (GOOD)")
+                            break
+                        elif response_byte == 0b00000010:
+                            print("Received from server: 00000010 (NOGOOD)")
+                            break
+                        else:
+                            print(f"Received unknown response: {bin(response_byte)}")
+                            break
+                except socket.timeout:
+                    if attempt < max_retries - 1:
+                        print(f"Waiting for response... ({attempt + 1}/{max_retries})")
+                        time.sleep(1)
+                    else:
+                        print("No response received after 20 seconds")
+            
+            print(f"Next message in {interval} seconds")
+            time.sleep(interval)
             
         except Exception as e:
             print(f"Error sending message: {e}")
@@ -99,8 +140,8 @@ def run_button_simulator(conn):
                 print(f"  - Capot type: {key}")
                 print("Waiting for detection result...")
                 
-                # Wait for response from server with retries
-                max_retries = 10  # Try for about 10 seconds total
+                # Wait for response with retries
+                max_retries = 20  # Try for about 20 seconds total
                 for attempt in range(max_retries):
                     try:
                         response = conn.recv(1024)
@@ -116,11 +157,11 @@ def run_button_simulator(conn):
                                 print(f"Received unknown response: {bin(response_byte)}")
                                 break
                     except socket.timeout:
-                        if attempt < max_retries - 1:  # Don't print on last attempt
+                        if attempt < max_retries - 1:
                             print(f"Waiting for response... ({attempt + 1}/{max_retries})")
-                            time.sleep(1)  # Wait a second before retrying
+                            time.sleep(1)
                         else:
-                            print("No response received from server after 10 seconds")
+                            print("No response received after 20 seconds")
             else:
                 print("Invalid key. Use 1, 2, 3, or q.")
                 
@@ -129,7 +170,6 @@ def run_button_simulator(conn):
             if "Broken pipe" in str(e) or "Connection reset" in str(e):
                 print("Connection to server lost. Exiting simulator.")
                 break
-            # Add a small delay before showing the menu again
             time.sleep(0.5)
     
     # Close the connection when done
@@ -142,53 +182,19 @@ def handle_client(conn, addr, interval, manual_mode):
     """Handle a client connection."""
     print(f"Connected by {addr}")
     try:
-        while True:
-            if manual_mode:
-                # In manual mode, wait for user input
-                print("\nPress Enter to send a message, or type a capot type (01, 05, 08) and press Enter:")
+        if manual_mode:
+            while True:
+                print("\nPress Enter to send a message, or type a capot type (1, 2, 3) and press Enter:")
                 user_input = input()
                 
                 if user_input.lower() == 'exit':
                     break
                 
                 # Send message based on user input
-                if user_input in ['01', '05', '08']:
-                    send_manual_message(conn, capot_type=user_input)
-                else:
-                    send_manual_message(conn)
-                
-                # Wait for response from server
-                try:
-                    response = conn.recv(1024)
-                    if response:
-                        response_byte = int.from_bytes(response, byteorder='big')
-                        if response_byte == 0b00000001:
-                            print("Received from server: 00000001 (GOOD)")
-                        elif response_byte == 0b00000010:
-                            print("Received from server: 00000010 (NOGOOD)")
-                        else:
-                            print(f"Received unknown response: {bin(response_byte)}")
-                except socket.timeout:
-                    print("No response received from server")
-            else:
-                # In automatic mode, send periodic messages
-                send_periodic_messages(conn, interval)
-                
-                # Wait for response from server
-                try:
-                    response = conn.recv(1024)
-                    if response:
-                        response_byte = int.from_bytes(response, byteorder='big')
-                        if response_byte == 0b00000001:
-                            print("Received from server: 00000001 (GOOD)")
-                        elif response_byte == 0b00000010:
-                            print("Received from server: 00000010 (NOGOOD)")
-                        else:
-                            print(f"Received unknown response: {bin(response_byte)}")
-                except socket.timeout:
-                    print("No response received from server")
-                
-                time.sleep(interval)
+                send_manual_message(conn, capot_type=user_input if user_input in ['1', '2', '3'] else None)
+        else:
+            # In automatic mode, send periodic messages
+            send_periodic_messages(conn, interval)
     except ConnectionResetError:
         print("Connection reset by server")
     except Exception as e:
@@ -224,7 +230,7 @@ def start_fake_server(host='127.0.0.1', port=12345, interval=5, mode='auto'):
             while True:
                 # Wait for a connection
                 conn, addr = server_socket.accept()
-                conn.settimeout(1.0)  # Set timeout for receiving responses
+                conn.settimeout(2.0)  # Set timeout for receiving responses to 2 seconds
                 print(f"Connected by {addr}")
                 
                 if mode == 'button':
