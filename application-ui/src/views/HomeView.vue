@@ -22,12 +22,12 @@
           <span>{{ loadingMessage }}</span>
         </div>
         <template v-else>
-          <FalseOutcomeButton v-if="!selectedItem.resultImage" @click="handleClick" text="Detectar" />
-          <FalseOutcomeButton v-else @click="handleClick" text="Detectar nuevamente" />
-          <FalseOutcomeButton v-show="selectedItem.outcome === 'NOGOOD'" @click="noEsDefecto(selectedItem)"
-            text="No es defecto" />
-          <FalseOutcomeButton v-show="selectedItem.outcome === 'GOOD'" @click="esDefecto(selectedItem)"
-            text="Es defecto" />
+        <FalseOutcomeButton v-if="!selectedItem.resultImage" @click="handleClick" text="Detectar" />
+        <FalseOutcomeButton v-else @click="handleClick" text="Detectar nuevamente" />
+        <FalseOutcomeButton v-show="selectedItem.outcome === 'NOGOOD'" @click="noEsDefecto(selectedItem)"
+          text="No es defecto" />
+        <FalseOutcomeButton v-show="selectedItem.outcome === 'GOOD'" @click="esDefecto(selectedItem)"
+          text="Es defecto" />
         </template>
       </div>
     </div>
@@ -228,8 +228,8 @@ onMounted(async () => {
 
   socket.on('handle_message', async (data: any) => {
     if (!messageBeingHandled.value) {
-      messageBeingHandled.value = true;
-      try {
+    messageBeingHandled.value = true;
+    try {
         await handleMessage(data);
       } finally {
         messageBeingHandled.value = false;

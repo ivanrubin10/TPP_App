@@ -403,13 +403,13 @@ def handle_plc_response(plc_socket):
 
                         # Calculate gray percentage
                         gray_percentage = calculate_gray_percentage(image_base64)
+                        print(f"Gray percentage: {gray_percentage:.2f}%")
                         
                         # Initialize variables
                         actual_part = None
                         detected_objects = []
                         result_image = image_base64  # Default to original image
                         
-                        # Only proceed with detection if gray percentage indicates presence of a capo
                         if gray_percentage >= 60:
                             # Load model and labels
                             model, labels = get_model_and_labels()
@@ -589,6 +589,55 @@ def handle_retry_connection():
     retry_connection()
     return jsonify({'message': 'Retrying connection...'}), 200
 
+def process_detection(image_base64, expected_part):
+    """
+    Process image detection with consistent rules.
+    Returns tuple of (actual_part, result_image, detected_objects, gray_percentage)
+    """
+    # Calculate gray percentage
+    gray_percentage = calculate_gray_percentage(image_base64)
+    print(f"Gray percentage: {gray_percentage:.2f}%")
+    
+    # Initialize variables
+    actual_part = None
+    detected_objects = []
+    result_image = image_base64  # Default to original image
+    
+    if gray_percentage < 60:
+        print("No capo detected - gray percentage below 60%")
+        actual_part = "No hay capo"
+        return actual_part, result_image, detected_objects, gray_percentage
+    
+    # Load model and labels
+    model, labels = get_model_and_labels()
+    
+    # Perform detection
+    result_image, detected_objects = tflite_detect_image(
+        model, 
+        image_base64, 
+        labels, 
+        min_conf=0.5,
+        early_exit=False
+    )
+    
+    # Count specific objects
+    has_amorfo = any(obj['class'].lower() == 'agujero amorfo' and obj['score'] > 0.5 for obj in detected_objects)
+    has_chico = any(obj['class'].lower() == 'chico' and obj['score'] > 0.5 for obj in detected_objects)
+    has_mediano = any(obj['class'].lower() == 'mediano' and obj['score'] > 0.5 for obj in detected_objects)
+    has_grande = any(obj['class'].lower() == 'grande' and obj['score'] > 0.5 for obj in detected_objects)
+    
+    # Apply detection rules
+    if has_amorfo:  # If any amorfo object is detected, it's tipo 2
+        actual_part = "Capo tipo 2"
+    elif has_chico and has_mediano and has_grande:
+        actual_part = "Capo tipo 3"
+    elif len(detected_objects) == 0:
+        actual_part = "Capo tipo 1"
+    else:
+        actual_part = "Capo no identificado"
+    
+    return actual_part, result_image, detected_objects, gray_percentage
+
 @app.route("/capture-image", methods=['GET', 'POST'])
 def capture_and_detect():
     # Extract parameters from either GET or POST request
@@ -596,80 +645,31 @@ def capture_and_detect():
         data = request.get_json()
         car_id = data.get('car_id', '')
         expected_part = data.get('expected_part', '')
-        compress_images = data.get('compress_images', False)
     else:
         car_id = request.args.get('car_id', '')
         expected_part = request.args.get('expected_part', '')
-        compress_images = request.args.get('compress_images', 'false').lower() == 'true'
     
     print(f"Capture request received for car_id: {car_id}, expected_part: {expected_part}")
     
-    # Get image based on configured source
     try:
         start_time = time.time()
         
-        # Check if we should use a sample image or capture from camera
+        # Get image based on configured source
         if config['image_source'] == 'camera':
             print("Using camera to capture image")
             base64_image = capture_image()
         else:
             print(f"Using sample image: {config['image_source']}")
             base64_image = load_sample_image(config['image_source'])
-            
-        capture_time = time.time()
-        print(f"Image acquisition time: {(capture_time - start_time) * 1000:.2f}ms")
         
-        # Calculate gray percentage
-        gray_percentage = calculate_gray_percentage(base64_image)
-        print(f"Gray percentage: {gray_percentage:.2f}%")
+        # Process detection
+        actual_part, result_image, detected_objects, gray_percentage = process_detection(base64_image, expected_part)
         
-        # Initialize variables
-        actual_part = None
-        detected_objects = []
-        result_image = base64_image  # Default to original image
-        
-        # Only proceed with detection if gray percentage indicates presence of a capo
-        if gray_percentage >= 60:
-            # Load model and labels
-            model, labels = get_model_and_labels()
-            
-            # Perform detection
-            result_image, detected_objects = tflite_detect_image(
-                model, 
-                base64_image, 
-                labels, 
-                min_conf=0.5,
-                early_exit=False
-            )
-            
-            # Count specific objects
-            has_amorfo = any(obj['class'].lower() == 'agujero amorfo' and obj['score'] > 0.5 for obj in detected_objects)
-            has_chico = any(obj['class'].lower() == 'chico' and obj['score'] > 0.5 for obj in detected_objects)
-            has_mediano = any(obj['class'].lower() == 'mediano' and obj['score'] > 0.5 for obj in detected_objects)
-            has_grande = any(obj['class'].lower() == 'grande' and obj['score'] > 0.5 for obj in detected_objects)
-            
-            # Apply detection rules
-            if has_amorfo:  # If any amorfo object is detected, it's tipo 2
-                actual_part = "Capo tipo 2"
-            elif has_chico and has_mediano and has_grande:
-                actual_part = "Capo tipo 3"
-            elif len(detected_objects) == 0:
-                actual_part = "Capo tipo 1"
-            else:
-                actual_part = "Capo no identificado"
-        else:
-            print("No capo detected - gray percentage below 60%")
-            actual_part = "No hay capo"
-        
-        # Determine outcome based on expected part and detection
-        if expected_part and actual_part:
-            outcome = "GOOD" if expected_part == actual_part else "NOGOOD"
-        else:
-            outcome = "UNKNOWN"
+        # Determine outcome
+        outcome = "GOOD" if expected_part == actual_part else "NOGOOD"
         
         # Log the detection in the database if car_id is provided
         if car_id:
-            # Create a dictionary with the data to log
             log_data = {
                 'car_id': car_id,
                 'date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -681,27 +681,19 @@ def capture_and_detect():
                 'gray_percentage': gray_percentage
             }
             
-            # Check if this car already exists in the database
             existing_car = CarLog.query.filter_by(car_id=car_id).first()
-            
             if existing_car:
-                # Update existing record
                 for key, value in log_data.items():
                     setattr(existing_car, key, value)
                 db.session.commit()
-                print(f"Updated existing record for car_id: {car_id}")
             else:
-                # Create new record
                 new_log = CarLog(**log_data)
                 db.session.add(new_log)
                 db.session.commit()
-                print(f"Created new record for car_id: {car_id}")
         
-        # Calculate total processing time
-        end_time = time.time()
-        processing_time = (end_time - start_time) * 1000  # in milliseconds
+        # Calculate processing time
+        processing_time = (time.time() - start_time) * 1000
         
-        # Return the results
         return jsonify({
             'image': base64_image,
             'objects': detected_objects,
