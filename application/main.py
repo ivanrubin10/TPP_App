@@ -308,200 +308,223 @@ def send_plc_response(socket, is_good):
 
 def handle_plc_response(plc_socket):
     """Handle responses from the PLC socket."""
+    global is_connected
     plc_socket.settimeout(0.5)
     
     while True:
         try:
+            if not is_connected:
+                print("Connection marked as disconnected, exiting handler")
+                break
+
             socketio.emit('connection_status', {'service': 'PLC', 'status': 'Conectado'})
             socketio.emit('connection_type', {'type': 'PLC'})
 
-            data = plc_socket.recv(1024)
-            if not data:
-                print("PLC disconnected")
-                socketio.emit('connection_status', {'service': 'PLC', 'status': 'Desconectado'})
-                break
+            try:
+                data = plc_socket.recv(1024)
+                if not data:
+                    print("PLC disconnected (no data)")
+                    socketio.emit('connection_status', {'service': 'PLC', 'status': 'Desconectado'})
+                    break
 
-            message = data.decode('UTF-8')
-            print(f"Received PLC message: {message}")
-            
-            if len(message) < 10:
-                print(f"Invalid message format: {message}")
-                continue
-            
-            sequence = message[3:7]
-            body = message[7:]
-            pn_pos = body.find("PN")
-            
-            if pn_pos == -1 or pn_pos + 3 > len(body):
-                print(f"Invalid message format: missing PN or type")
-                continue
-            
-            capot_type = body[pn_pos + 2]
-            expected_part = {
-                "1": "Capo tipo 1",
-                "2": "Capo tipo 2",
-                "3": "Capo tipo 3"
-            }.get(capot_type)
-            
-            if not expected_part:
-                print(f"Unknown capot type: {capot_type}")
-                continue
-
-            car_id = f"{sequence}-{body}"
-            current_time = time.strftime("%d-%m-%Y %H:%M:%S")
-
-            with app.app_context():
-                if CarLog.query.filter_by(car_id=car_id).first():
-                    print(f"Car {car_id} already exists in database, skipping")
+                # Skip processing null bytes (connection checks)
+                if data == b'\x00':
                     continue
 
-                # Create initial car entry
-                new_car = CarLog(
-                    car_id=car_id,
-                    date=current_time,
-                    expected_part=expected_part,
-                    actual_part="Pendiente",
-                    original_image="",
-                    result_image="",
-                    outcome="Pendiente",
-                    gray_percentage=None
-                )
+                message = data.decode('UTF-8')
+                print(f"Received PLC message: {message}")
                 
-                try:
-                    db.session.add(new_car)
-                    db.session.commit()
-                    
-                    # Notify frontend about new car
-                    socketio.emit('new_car', {
-                        'car_id': car_id,
-                        'date': current_time,
-                        'expected_part': expected_part
-                    })
-                    
-                    time.sleep(1)  # Wait for camera
-                    
-                    print(f"Starting detection for car {car_id}")
-                    try:
-                        # Capture image
-                        image_base64 = capture_image()
-                        if not image_base64:
-                            raise Exception("Failed to capture image")
+                if len(message) < 10:
+                    print(f"Invalid message format: {message}")
+                    continue
+                
+                sequence = message[3:7]
+                body = message[7:]
+                pn_pos = body.find("PN")
+                
+                if pn_pos == -1 or pn_pos + 3 > len(body):
+                    print(f"Invalid message format: missing PN or type")
+                    continue
+                
+                capot_type = body[pn_pos + 2]
+                expected_part = {
+                    "1": "Capo tipo 1",
+                    "2": "Capo tipo 2",
+                    "3": "Capo tipo 3"
+                }.get(capot_type)
+                
+                if not expected_part:
+                    print(f"Unknown capot type: {capot_type}")
+                    continue
 
-                        # Calculate gray percentage
-                        gray_percentage = calculate_gray_percentage(image_base64)
-                        print(f"Gray percentage: {gray_percentage:.2f}%")
+                car_id = f"{sequence}-{body}"
+                current_time = time.strftime("%d-%m-%Y %H:%M:%S")
+
+                with app.app_context():
+                    if CarLog.query.filter_by(car_id=car_id).first():
+                        print(f"Car {car_id} already exists in database, skipping")
+                        continue
+
+                    # Create initial car entry
+                    new_car = CarLog(
+                        car_id=car_id,
+                        date=current_time,
+                        expected_part=expected_part,
+                        actual_part="Pendiente",
+                        original_image="",
+                        result_image="",
+                        outcome="Pendiente",
+                        gray_percentage=None
+                    )
+                    
+                    try:
+                        db.session.add(new_car)
+                        db.session.commit()
                         
-                        # Initialize variables
-                        actual_part = None
-                        detected_objects = []
-                        result_image = image_base64  # Default to original image
+                        # Notify frontend about new car
+                        socketio.emit('new_car', {
+                            'car_id': car_id,
+                            'date': current_time,
+                            'expected_part': expected_part
+                        })
                         
-                        if gray_percentage >= 60:
-                            # Load model and labels
-                            model, labels = get_model_and_labels()
-                            
-                            # Perform detection
-                            result_image, detected_objects = tflite_detect_image(
-                                model, 
-                                image_base64, 
-                                labels, 
-                                min_conf=0.5,
-                                early_exit=False
-                            )
-                            
-                            # Count specific objects
-                            has_amorfo = any(obj['class'].lower() == 'agujero amorfo' and obj['score'] > 0.5 for obj in detected_objects)
-                            has_chico = any(obj['class'].lower() == 'chico' and obj['score'] > 0.5 for obj in detected_objects)
-                            has_mediano = any(obj['class'].lower() == 'mediano' and obj['score'] > 0.5 for obj in detected_objects)
-                            has_grande = any(obj['class'].lower() == 'grande' and obj['score'] > 0.5 for obj in detected_objects)
-                            
-                            # Apply detection rules
-                            if has_amorfo:  # If any amorfo object is detected, it's tipo 2
-                                actual_part = "Capo tipo 2"
-                            elif has_chico and has_mediano and has_grande:
-                                actual_part = "Capo tipo 3"
-                            elif len(detected_objects) == 0:
-                                actual_part = "Capo tipo 1"
+                        time.sleep(1)  # Wait for camera
+                        
+                        print(f"Starting detection for car {car_id}")
+                        try:
+                            # Get image based on configured source
+                            if config['image_source'] == 'camera':
+                                print("Using camera to capture image")
+                                image_base64 = capture_image()
                             else:
-                                actual_part = "Capo no identificado"
-                        else:
-                            print("No capo detected - gray percentage below 60%")
-                            actual_part = "No hay capo"
-                        
-                        # Determine outcome
-                        outcome = "GOOD" if actual_part == expected_part else "NOGOOD"
-                        
-                        # Send response to PLC based on outcome
-                        send_plc_response(plc_socket, outcome == "GOOD")
-                        
-                        # Update car in database with complete results
-                        car = CarLog.query.filter_by(car_id=car_id).first()
-                        if car:
-                            car.actual_part = actual_part
-                            car.outcome = outcome
-                            car.original_image = image_base64
-                            car.result_image = result_image
-                            car.gray_percentage = gray_percentage
-                            db.session.commit()
+                                print(f"Using sample image: {config['image_source']}")
+                                image_base64 = load_sample_image(config['image_source'])
+
+                            if not image_base64:
+                                raise Exception("Failed to get image")
+
+                            # Calculate gray percentage
+                            gray_percentage = calculate_gray_percentage(image_base64)
+                            print(f"Gray percentage: {gray_percentage:.2f}%")
                             
-                            # Notify frontend with complete results
-                            socketio.emit('detection_complete', {
-                                'car_id': car_id,
-                                'actual_part': actual_part,
-                                'outcome': outcome,
-                                'original_image': image_base64,
-                                'result_image': result_image,
-                                'gray_percentage': gray_percentage
-                            })
+                            # Initialize variables
+                            actual_part = None
+                            detected_objects = []
+                            result_image = image_base64  # Default to original image
                             
-                            print(f"Detection completed for car {car_id}: {outcome}")
+                            if gray_percentage >= 60:
+                                # Load model and labels
+                                model, labels = get_model_and_labels()
+                                
+                                # Perform detection
+                                result_image, detected_objects = tflite_detect_image(
+                                    model, 
+                                    image_base64, 
+                                    labels, 
+                                    min_conf=0.5,
+                                    early_exit=False
+                                )
+                                
+                                # Count specific objects
+                                has_amorfo = any(obj['class'].lower() == 'agujero amorfo' and obj['score'] > 0.5 for obj in detected_objects)
+                                has_chico = any(obj['class'].lower() == 'chico' and obj['score'] > 0.5 for obj in detected_objects)
+                                has_mediano = any(obj['class'].lower() == 'mediano' and obj['score'] > 0.5 for obj in detected_objects)
+                                has_grande = any(obj['class'].lower() == 'grande' and obj['score'] > 0.5 for obj in detected_objects)
+                                
+                                # Apply detection rules
+                                if has_amorfo:  # If any amorfo object is detected, it's tipo 2
+                                    actual_part = "Capo tipo 2"
+                                elif has_chico and has_mediano and has_grande:
+                                    actual_part = "Capo tipo 3"
+                                elif len(detected_objects) == 0:
+                                    actual_part = "Capo tipo 1"
+                                else:
+                                    actual_part = "Capo no identificado"
+                            else:
+                                print("No capo detected - gray percentage below 60%")
+                                actual_part = "No hay capo"
                             
-                            # If outcome is NOGOOD and a hood was detected, send to ICS
-                            if outcome == "NOGOOD" and 'capo' in actual_part.lower():
-                                print(f"Sending NOGOOD result to ICS for car {car_id}")
-                                vin = ics.request_vin(car_id)
-                                if vin:
-                                    ics.send_defect_data(vin, image_base64, expected_part, actual_part)
+                            # Determine outcome
+                            outcome = "GOOD" if actual_part == expected_part else "NOGOOD"
+                            
+                            # Send response to PLC based on outcome
+                            send_plc_response(plc_socket, outcome == "GOOD")
+                            
+                            # Update car in database with complete results
+                            car = CarLog.query.filter_by(car_id=car_id).first()
+                            if car:
+                                car.actual_part = actual_part
+                                car.outcome = outcome
+                                car.original_image = image_base64
+                                car.result_image = result_image
+                                car.gray_percentage = gray_percentage
+                                db.session.commit()
+                                
+                                # Notify frontend with complete results
+                                socketio.emit('detection_complete', {
+                                    'car_id': car_id,
+                                    'actual_part': actual_part,
+                                    'outcome': outcome,
+                                    'original_image': image_base64,
+                                    'result_image': result_image,
+                                    'gray_percentage': gray_percentage
+                                })
+                                
+                                print(f"Detection completed for car {car_id}: {outcome}")
+                                
+                                # If outcome is NOGOOD and a hood was detected, send to ICS
+                                if outcome == "NOGOOD" and 'capo' in actual_part.lower():
+                                    print(f"Sending NOGOOD result to ICS for car {car_id}")
+                                    vin = ics.request_vin(car_id)
+                                    if vin:
+                                        ics.send_defect_data(vin, image_base64, expected_part, actual_part)
+                        
+                        except Exception as e:
+                            print(f"Error during detection process: {str(e)}")
+                            car = CarLog.query.filter_by(car_id=car_id).first()
+                            if car:
+                                car.actual_part = "Error en detección"
+                                car.outcome = "Error"
+                                db.session.commit()
+                                socketio.emit('detection_error', {
+                                    'car_id': car_id,
+                                    'error': str(e)
+                                })
+                                # Send error response to PLC
+                                send_plc_response(plc_socket, False)  # Send NOGOOD in case of error
                     
                     except Exception as e:
-                        print(f"Error during detection process: {str(e)}")
-                        car = CarLog.query.filter_by(car_id=car_id).first()
-                        if car:
-                            car.actual_part = "Error en detección"
-                            car.outcome = "Error"
-                            db.session.commit()
-                            socketio.emit('detection_error', {
-                                'car_id': car_id,
-                                'error': str(e)
-                            })
-                            # Send error response to PLC
-                            send_plc_response(plc_socket, False)  # Send NOGOOD in case of error
-                
-                except Exception as e:
-                    print(f"Error processing new car: {str(e)}")
-                    db.session.rollback()
-                    # Send error response to PLC
-                    send_plc_response(plc_socket, False)  # Send NOGOOD in case of error
+                        print(f"Error processing new car: {str(e)}")
+                        db.session.rollback()
+                        # Send error response to PLC
+                        send_plc_response(plc_socket, False)  # Send NOGOOD in case of error
             
-        except socket.timeout:
-            continue
-        except ConnectionResetError:
-            print("PLC connection reset")
-            socketio.emit('connection_status', {'service': 'PLC', 'status': 'Desconectado'})
-            break
+            except socket.timeout:
+                continue
+            except ConnectionResetError:
+                print("PLC connection reset")
+                socketio.emit('connection_status', {'service': 'PLC', 'status': 'Desconectado'})
+                break
+            except Exception as e:
+                print(f"Error in PLC handler: {str(e)}")
+                traceback.print_exc()
+                try:
+                    socketio.emit('connection_status', {'service': 'PLC', 'status': 'Error'})
+                except:
+                    pass
+                break
+
         except Exception as e:
-            print(f"Error in PLC handler: {str(e)}")
+            print(f"Error in main PLC handler loop: {str(e)}")
             traceback.print_exc()
-            try:
-                socketio.emit('connection_status', {'service': 'PLC', 'status': 'Error'})
-            except:
-                pass
             break
     
+    is_connected = False
     try:
         plc_socket.close()
     except:
         pass
+    print("PLC handler terminated")
 
 def connect_to_plc():
     global client_socket, is_connected, plc_connection
