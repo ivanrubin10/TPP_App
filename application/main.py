@@ -524,11 +524,47 @@ def connect_to_plc():
         print(f"PLC connection error: {e}")
 
 def retry_connection():
+    global client_socket, is_connected, plc_connection, galc_connection
+    
     print("Retrying connection...")
+    
+    # Close existing connections
+    if plc_connection:
+        try:
+            plc_connection.shutdown(socket.SHUT_RDWR)
+            plc_connection.close()
+        except:
+            pass
+        plc_connection = None
+        
+    if galc_connection:
+        try:
+            galc_connection.shutdown(socket.SHUT_RDWR)
+            galc_connection.close()
+        except:
+            pass
+        galc_connection = None
+        
+    if client_socket:
+        try:
+            client_socket.shutdown(socket.SHUT_RDWR)
+            client_socket.close()
+        except:
+            pass
+        client_socket = None
+    
+    is_connected = False
+    socketio.emit('connection_status', {'status': False})
+    
+    # Wait a moment for connections to close
+    time.sleep(1)
+    
+    # Attempt to reconnect
     if config['connection_type'] == "GALC":
         connect_to_galc()
     else:
         connect_to_plc()
+
 # Start the appropriate connection based on connection type
 @socketio.on('connect')
 def handle_connect():
