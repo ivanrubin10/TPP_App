@@ -5,11 +5,16 @@ import random
 import argparse
 import sys
 
+def generate_unique_sequence():
+    """Generate a unique sequence number using timestamp and random number"""
+    timestamp = int(time.time() * 1000) % 10000  # Get last 4 digits of current timestamp in milliseconds
+    random_num = random.randint(0, 999)  # 3-digit random number
+    return f"{timestamp:04d}{random_num:03d}"[-4:]  # Take last 4 digits to maintain format
+
 def send_manual_message(conn, capot_type=None):
     """Send a single message with an optional specified capot type"""
-    # Generate a random sequence number
-    sequence = random.randint(1000, 9999)
-    seq_str = f"{sequence:04d}"
+    # Generate a unique sequence number
+    sequence = generate_unique_sequence()
     
     # Use specified capot type or random one
     if capot_type not in ['1', '2', '3']:
@@ -18,12 +23,12 @@ def send_manual_message(conn, capot_type=None):
         capot = capot_type
     
     # Construct the full message in expected format: SEQxxxxPNyWTzz
-    message = f"SEQ{seq_str}PN{capot}WT01"
+    message = f"SEQ{sequence}PN{capot}WT01"
     
     try:
         conn.sendall(message.encode())
         print(f"Sent manual PLC message: {message}")
-        print(f"  - Sequence: {seq_str}")
+        print(f"  - Sequence: {sequence}")
         print(f"  - Capot type: {capot}")
         print("Waiting for detection result...")
         
@@ -61,7 +66,7 @@ def send_manual_message(conn, capot_type=None):
 
 def send_periodic_messages(conn, interval=30):
     # Function to send periodic messages to the client
-    sequence = 1000  # Starting sequence number
+    last_sequence = None
     
     while True:
         try:
@@ -72,19 +77,21 @@ def send_periodic_messages(conn, interval=30):
                 print("Connection lost to server")
                 return
             
-            # Increment sequence number
-            sequence += 1
-            seq_str = f"{sequence:04d}"  # Format as 4 digits
+            # Generate unique sequence
+            sequence = generate_unique_sequence()
+            while sequence == last_sequence:  # Ensure we don't repeat the last sequence
+                sequence = generate_unique_sequence()
+            last_sequence = sequence
             
             # Generate a random capot type (1, 2, or 3)
             capot = random.choice(['1', '2', '3'])
             
             # Construct the full message in expected format: SEQxxxxPNyWTzz
-            message = f"SEQ{seq_str}PN{capot}WT01"
+            message = f"SEQ{sequence}PN{capot}WT01"
             
             conn.sendall(message.encode())
             print(f"Sent PLC message: {message}")
-            print(f"  - Sequence: {seq_str}")
+            print(f"  - Sequence: {sequence}")
             print(f"  - Capot type: {capot}")
             print("Waiting for detection result...")
             
@@ -133,7 +140,7 @@ def run_button_simulator(conn):
     print("q - Quit")
     print("==============================\n")
     
-    sequence = 1000  # Starting sequence number
+    last_sequence = None
     
     while True:
         try:
@@ -146,18 +153,20 @@ def run_button_simulator(conn):
                 
             # Map key to capot type
             if key in ['1', '2', '3']:
-                # Increment sequence
-                sequence += 1
-                seq_str = f"{sequence:04d}"
+                # Generate unique sequence
+                sequence = generate_unique_sequence()
+                while sequence == last_sequence:  # Ensure we don't repeat the last sequence
+                    sequence = generate_unique_sequence()
+                last_sequence = sequence
                 
                 # Construct message in the format expected by the application: SEQxxxxPNyWTzz
-                message = f"SEQ{seq_str}PN{key}WT01"
+                message = f"SEQ{sequence}PN{key}WT01"
                 
                 try:
                     # Send the message
                     conn.sendall(message.encode())
                     print(f"Button press sent: {message}")
-                    print(f"  - Sequence: {seq_str}")
+                    print(f"  - Sequence: {sequence}")
                     print(f"  - Capot type: {key}")
                     print("Waiting for detection result...")
                     
