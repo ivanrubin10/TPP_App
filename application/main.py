@@ -966,11 +966,11 @@ def calculate_gray_percentage(base64_image):
 
 def mark_low_gray_percentage_image(base64_image, gray_percentage):
     """
-    Add text to the image indicating low gray percentage.
+    Add text to the image indicating it's too dark or poorly illuminated.
     
     Args:
         base64_image (str): Base64 encoded image string
-        gray_percentage (float): The calculated gray percentage
+        gray_percentage (float): The calculated gray percentage (not displayed anymore)
         
     Returns:
         str: Base64 encoded image with text overlay
@@ -993,22 +993,16 @@ def mark_low_gray_percentage_image(base64_image, gray_percentage):
         
         # Add semi-transparent overlay at the top
         overlay = img.copy()
-        cv2.rectangle(overlay, (0, 0), (width, 120), (40, 40, 200), -1)
+        cv2.rectangle(overlay, (0, 0), (width, 80), (40, 40, 200), -1)
         alpha = 0.7  # Transparency factor
         cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0, img)
         
-        # Add text with gray percentage
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        text = f"Porcentaje gris: {gray_percentage:.2f}% (Mínimo requerido: 60%)"
-        text_size = cv2.getTextSize(text, font, 0.8, 2)[0]
-        text_x = (width - text_size[0]) // 2
-        cv2.putText(img, text, (text_x, 40), font, 0.8, (255, 255, 255), 2)
-        
         # Add explanation text
+        font = cv2.FONT_HERSHEY_SIMPLEX
         explanation = "Imagen demasiado oscura o mal iluminada"
         expl_size = cv2.getTextSize(explanation, font, 0.8, 2)[0]
         expl_x = (width - expl_size[0]) // 2
-        cv2.putText(img, explanation, (expl_x, 80), font, 0.8, (255, 255, 255), 2)
+        cv2.putText(img, explanation, (expl_x, 50), font, 0.8, (255, 255, 255), 2)
         
         # Encode back to base64
         _, buffer = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 95])
