@@ -171,7 +171,7 @@ def run_button_simulator(conn):
                 for attempt in range(max_retries):
                     try:
                         response = conn.recv(1024)
-                        if not data:  # Connection closed by remote end
+                        if not response:  # Connection closed by remote end
                             print("Connection closed by server")
                             return
                         response_byte = int.from_bytes(response, byteorder='big')
