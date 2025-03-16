@@ -65,15 +65,17 @@ def send_periodic_messages(conn, interval=30):
 
 def run_button_simulator(conn):
     """Simulate button presses to send car messages"""
+    print("\n=== BUTTON SIMULATOR MODE ===")
+    print("Press keys to simulate button presses:")
+    print("1 - Send Capo Tipo 1")
+    print("2 - Send Capo Tipo 2")
+    print("3 - Send Capo Tipo 3")
+    print("q - Quit")
+    print("==============================\n")
+    
+    sequence = 1000  # Starting sequence number
+    
     while True:
-        print("\n=== BUTTON SIMULATOR MODE ===")
-        print("Press keys to simulate button presses:")
-        print("1 - Send Capot Tipo 1")
-        print("2 - Send Capot Tipo 2")
-        print("3 - Send Capot Tipo 3")
-        print("q - Quit")
-        print("==============================\n")
-        
         try:
             # Wait for a key press
             key = input("Press a button key (1/2/3/q): ")
@@ -84,25 +86,31 @@ def run_button_simulator(conn):
                 
             # Map key to capot type
             if key in ['1', '2', '3']:
-                capot_type = key
-                print(f"Sending Capot Tipo {capot_type}...")
-                
                 # Increment sequence
-                if not hasattr(run_button_simulator, 'sequence'):
-                    run_button_simulator.sequence = 1000
-                run_button_simulator.sequence += 1
-                seq_str = f"{run_button_simulator.sequence:04d}"
+                sequence += 1
+                seq_str = f"{sequence:04d}"
                 
                 # Construct message in the format expected by the application: SEQxxxxPNyWTzz
-                message = f"SEQ{seq_str}PN{capot_type}WT01"
+                message = f"SEQ{seq_str}PN{key}WT01"
                 conn.sendall(message.encode())
                 
                 print(f"Button press sent: {message}")
                 print(f"  - Sequence: {seq_str}")
-                print(f"  - Capot type: {capot_type}")
+                print(f"  - Capot type: {key}")
                 
-                # Add a small delay before showing the menu again
-                time.sleep(0.5)
+                # Wait for response from server
+                try:
+                    response = conn.recv(1024)
+                    if response:
+                        response_byte = int.from_bytes(response, byteorder='big')
+                        if response_byte == 0b00000001:
+                            print("Received from server: 00000001 (GOOD)")
+                        elif response_byte == 0b00000010:
+                            print("Received from server: 00000010 (NOGOOD)")
+                        else:
+                            print(f"Received unknown response: {bin(response_byte)}")
+                except socket.timeout:
+                    print("No response received from server")
             else:
                 print("Invalid key. Use 1, 2, 3, or q.")
                 
@@ -113,6 +121,12 @@ def run_button_simulator(conn):
                 break
             # Add a small delay before showing the menu again
             time.sleep(0.5)
+    
+    # Close the connection when done
+    try:
+        conn.close()
+    except:
+        pass
 
 def handle_client(conn, addr, interval, manual_mode):
     """Handle a client connection."""
@@ -173,7 +187,8 @@ def handle_client(conn, addr, interval, manual_mode):
         print("Closing connection")
         conn.close()
 
-def start_fake_server(host='127.0.0.1', port=12345, interval=30, mode='auto'):
+def start_fake_server(host='127.0.0.1', port=12345, interval=5, mode='auto'):
+    """Start a fake PLC server that sends messages."""
     print(f"Starting fake PLC server on {host}:{port}")
     
     if mode == 'auto':
@@ -199,13 +214,22 @@ def start_fake_server(host='127.0.0.1', port=12345, interval=30, mode='auto'):
             while True:
                 # Wait for a connection
                 conn, addr = server_socket.accept()
-                # Handle client in a separate thread
-                client_thread = threading.Thread(target=handle_client, args=(conn, addr, interval, mode == 'manual'), daemon=True)
-                client_thread.start()
+                conn.settimeout(1.0)  # Set timeout for receiving responses
                 
-                # If in button mode, just handle one connection at a time
                 if mode == 'button':
-                    client_thread.join()
+                    # Run button simulator directly
+                    run_button_simulator(conn)
+                else:
+                    # Handle client in a separate thread for auto/manual modes
+                    client_thread = threading.Thread(
+                        target=handle_client, 
+                        args=(conn, addr, interval, mode == 'manual'),
+                        daemon=True
+                    )
+                    client_thread.start()
+                    
+                    if mode == 'button':
+                        client_thread.join()
 
         except Exception as e:
             print(f"Server error: {e}")
@@ -219,7 +243,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Fake PLC Server')
     parser.add_argument('--host', default='127.0.0.1', help='Host to bind to')
     parser.add_argument('--port', type=int, default=12345, help='Port to bind to')
-    parser.add_argument('--interval', type=int, default=30, help='Interval between messages in seconds')
+    parser.add_argument('--interval', type=int, default=5, help='Interval between messages in seconds')
     parser.add_argument('--mode', choices=['auto', 'manual', 'button'], default='auto',
                         help='Operation mode: auto (periodic messages), manual (type to send), or button (simulate buttons)')
     
