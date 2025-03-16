@@ -7,6 +7,12 @@
         <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
       </svg>
     </div>
+    
+    <!-- Add image source selector -->
+    <div class="image-source-container">
+      <ImageSourceSelector v-model="imageSource" @update:modelValue="updateImageSource" />
+    </div>
+    
     <div class="container" v-if="selectedItem">
       <div class="inspection-header">
         <p>{{ selectedItem.id }}</p>
@@ -56,6 +62,7 @@ import InspectionResults from '../components/InspectionResults.vue'
 import { onBeforeUnmount, onMounted, ref, onUnmounted, nextTick } from 'vue';
 import socket from '../composables/socket';
 import axios from 'axios';
+import ImageSourceSelector from '../components/ImageSourceSelector.vue'
 
 const baseUrl = 'http://localhost:5000'
 
@@ -108,6 +115,7 @@ const isLoading = ref(false);
 const loadingMessage = ref('');
 const errorMessage = ref('');
 const activeDetectionCarId = ref<string | null>(null);
+const imageSource = ref<string>('default');
 
 const { 
   captureImage,
@@ -118,7 +126,8 @@ const {
   addLog,
   retryConnection,
   sendToICS,
-  getConfig } = useBackendApi()
+  getConfig,
+  saveConfig } = useBackendApi()
 
 let clickHandle = false;
 
@@ -207,7 +216,8 @@ const triggerManualDetection = async (carId: string) => {
 };
 
 onMounted(async () => {
-  // Get initial config to set connection type
+  // Get initial config to set connection type and image source
+  await loadConfig();
   const config = await getConfig();
   connectionType.value = config.connection_type;
 
@@ -824,6 +834,33 @@ const detectObjects = async () => {
     loadingMessage.value = '';
   }
 }
+
+// Function to load the current configuration
+const loadConfig = async () => {
+  try {
+    const config = await getConfig();
+    console.log('Loaded configuration:', config);
+    imageSource.value = config.image_source || 'camera';
+  } catch (error) {
+    console.error('Error loading configuration:', error);
+  }
+};
+
+// Function to update the image source configuration
+const updateImageSource = async (newSource: string) => {
+  try {
+    console.log('Updating image source to:', newSource);
+    imageSource.value = newSource;
+    
+    // Save the configuration to the server
+    await saveConfig({ image_source: newSource });
+    console.log('Image source configuration saved successfully');
+  } catch (error) {
+    console.error('Error saving image source configuration:', error);
+    errorMessage.value = 'Error al guardar la configuración de la fuente de imagen';
+    setTimeout(() => errorMessage.value = '', 3000);
+  }
+};
 </script>
 
 <style scoped>
@@ -1004,5 +1041,11 @@ const detectObjects = async () => {
   box-shadow: 0 2px 8px rgba(0,0,0,0.2);
   text-align: center;
   font-weight: bold;
+}
+
+.image-source-container {
+  padding: 10px 70px;
+  background-color: var(--bg-200);
+  margin-bottom: 10px;
 }
 </style>

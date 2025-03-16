@@ -149,7 +149,8 @@ config = {
     "plc_host": "127.0.0.1",  # Default IP as a string
     "plc_port": 12345,        # Default port as a number
     "galc_host": "127.0.0.1", # Default GALC IP
-    "galc_port": 54321        # Default GALC port
+    "galc_port": 54321,       # Default GALC port
+    "image_source": "camera"  # Options: "camera", "no_capo", "capo_tipo_1", "capo_tipo_2", "capo_tipo_3"
 }
 
 client_socket = None
@@ -583,12 +584,20 @@ def capture_and_detect():
     
     print(f"Capture request received for car_id: {car_id}, expected_part: {expected_part}")
     
-    # Capture image from camera
+    # Get image based on configured source
     try:
         start_time = time.time()
-        base64_image = capture_image()
+        
+        # Check if we should use a sample image or capture from camera
+        if config['image_source'] == 'camera':
+            print("Using camera to capture image")
+            base64_image = capture_image()
+        else:
+            print(f"Using sample image: {config['image_source']}")
+            base64_image = load_sample_image(config['image_source'])
+            
         capture_time = time.time()
-        print(f"Image capture time: {(capture_time - start_time) * 1000:.2f}ms")
+        print(f"Image acquisition time: {(capture_time - start_time) * 1000:.2f}ms")
         
         # Calculate gray percentage
         gray_percentage = calculate_gray_percentage(base64_image)
@@ -851,7 +860,13 @@ def handle_config():
                 config['galc_port'] = int(data['galc_port'])
             except ValueError:
                 return jsonify({"error": "galc_port must be an integer"}), 400
-
+        if 'image_source' in data:
+            # Validate image_source value
+            valid_sources = ["camera", "no_capo", "capo_tipo_1", "capo_tipo_2", "capo_tipo_3"]
+            if data['image_source'] in valid_sources:
+                config['image_source'] = str(data['image_source'])
+            else:
+                return jsonify({"error": f"image_source must be one of: {', '.join(valid_sources)}"}), 400
         
         return jsonify({"message": "Configuration updated successfully"}), 200
 
@@ -1024,6 +1039,72 @@ def reset_database():
         return jsonify({'message': 'Database reset successfully'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+# Add this function to load sample images
+def load_sample_image(image_type):
+    """
+    Load a sample image based on the specified type.
+    
+    Args:
+        image_type (str): Type of image to load ('no_capo', 'capo_tipo_1', 'capo_tipo_2', 'capo_tipo_3')
+        
+    Returns:
+        str: Base64 encoded image string
+    """
+    # Map image types to file paths
+    image_paths = {
+        'no_capo': os.path.join('sample_images', 'no_capo.jpg'),
+        'capo_tipo_1': os.path.join('sample_images', 'capo_tipo_1.jpg'),
+        'capo_tipo_2': os.path.join('sample_images', 'capo_tipo_2.jpg'),
+        'capo_tipo_3': os.path.join('sample_images', 'capo_tipo_3.jpg')
+    }
+    
+    # Get the path for the requested image type
+    if image_type not in image_paths:
+        print(f"Invalid image type: {image_type}")
+        # Create a blank image as fallback
+        blank_img = np.zeros((480, 640, 3), dtype=np.uint8)
+        blank_img.fill(200)  # Light gray
+        # Add text to indicate error
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        cv2.putText(blank_img, f"Invalid image type: {image_type}", (50, 240), font, 1, (0, 0, 255), 2)
+        _, buffer = cv2.imencode('.jpg', blank_img)
+        return base64.b64encode(buffer).decode('utf-8')
+    
+    image_path = image_paths[image_type]
+    
+    # Check if the file exists in the application directory
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    full_path = os.path.join(app_dir, image_path)
+    
+    if not os.path.exists(full_path):
+        print(f"Sample image not found: {full_path}")
+        # Create a placeholder image with text
+        placeholder_img = np.zeros((480, 640, 3), dtype=np.uint8)
+        placeholder_img.fill(200)  # Light gray
+        
+        # Add text to indicate missing file
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        cv2.putText(placeholder_img, f"Sample image not found: {image_type}", (50, 240), font, 1, (0, 0, 255), 2)
+        cv2.putText(placeholder_img, f"Create file: {full_path}", (50, 280), font, 0.7, (0, 0, 255), 2)
+        
+        _, buffer = cv2.imencode('.jpg', placeholder_img)
+        return base64.b64encode(buffer).decode('utf-8')
+    
+    # Read and encode the image
+    try:
+        with open(full_path, 'rb') as f:
+            image_data = f.read()
+        return base64.b64encode(image_data).decode('utf-8')
+    except Exception as e:
+        print(f"Error loading sample image: {str(e)}")
+        # Create an error image
+        error_img = np.zeros((480, 640, 3), dtype=np.uint8)
+        error_img.fill(200)  # Light gray
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        cv2.putText(error_img, f"Error loading image: {str(e)}", (50, 240), font, 0.8, (0, 0, 255), 2)
+        _, buffer = cv2.imencode('.jpg', error_img)
+        return base64.b64encode(buffer).decode('utf-8')
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
