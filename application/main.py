@@ -151,7 +151,8 @@ config = {
     "plc_port": 12345,        # Default port as a number
     "galc_host": "127.0.0.1", # Default GALC IP
     "galc_port": 54321,       # Default GALC port
-    "image_source": "camera"  # Options: "camera", "no_capo", "capo_tipo_1", "capo_tipo_2", "capo_tipo_3"
+    "image_source": "camera",  # Options: "camera", "no_capo", "capo_tipo_1", "capo_tipo_2", "capo_tipo_3"
+    "use_galc": False,        # Added for the new retry_connection method
 }
 
 client_socket = None
@@ -299,13 +300,28 @@ def send_plc_response(socket, is_good):
         socket: The PLC socket connection
         is_good (bool): True if detection result is GOOD, False if NOGOOD
     """
+    if socket is None or not hasattr(socket, 'sendall'):
+        print("ERROR: Cannot send PLC response - Invalid socket")
+        return False
+        
     try:
         # Create response byte: 00000001 for GOOD, 00000010 for NOGOOD
         response_byte = bytes([0b00000001]) if is_good else bytes([0b00000010])
         socket.sendall(response_byte)
         print(f"Sent response to PLC: {bin(response_byte[0])} ({'GOOD' if is_good else 'NOGOOD'})")
+        return True
+    except ConnectionResetError:
+        print("ERROR: Connection reset while sending response to PLC")
+        global is_connected, plc_connection
+        is_connected = False
+        plc_connection = None
+        return False
+    except (socket.error, OSError) as sock_err:
+        print(f"Socket error sending response to PLC: {str(sock_err)}")
+        return False
     except Exception as e:
         print(f"Error sending response to PLC: {str(e)}")
+        return False
 
 def handle_plc_response(plc_socket):
     """Handle responses from the PLC socket."""
@@ -313,6 +329,10 @@ def handle_plc_response(plc_socket):
     print("\n=== Starting PLC response handler ===")
     print(f"Initial connection status: {is_connected}")
     
+    if not plc_socket or not hasattr(plc_socket, 'recv'):
+        print("ERROR: Invalid socket provided to handler")
+        return
+        
     plc_socket.settimeout(0.5)
     print("Socket timeout set to 0.5 seconds")
     
@@ -424,196 +444,223 @@ def handle_plc_response(plc_socket):
                                 'expected_part': expected_part
                             })
                             
-                            print("Waiting for camera...")
-                            time.sleep(1)  # Wait for camera
-                            
-                            print(f"\n=== Starting detection for car {car_id} ===")
-                            try:
-                                # Get image based on configured source
-                                print(f"Image source configured as: {config['image_source']}")
-                                if config['image_source'] == 'camera':
-                                    print("Capturing image from camera...")
-                                    image_base64 = capture_image()
-                                else:
-                                    print(f"Loading sample image: {config['image_source']}")
-                                    image_base64 = load_sample_image(config['image_source'])
-
-                                if not image_base64:
-                                    raise Exception("Failed to get image")
-
-                                print("Calculating gray percentage...")
-                                gray_percentage = calculate_gray_percentage(image_base64)
-                                print(f"Gray percentage calculated: {gray_percentage:.2f}%")
-                                
-                                # Initialize variables
-                                actual_part = None
-                                detected_objects = []
-                                result_image = image_base64  # Default to original image
-                                
-                                if gray_percentage >= 60:
-                                    print("Gray percentage >= 60%, proceeding with detection...")
-                                    # Load model and labels
-                                    model, labels = get_model_and_labels()
-                                    
-                                    # Perform detection
-                                    print("Running object detection...")
-                                    result_image, detected_objects = tflite_detect_image(
-                                        model, 
-                                        image_base64, 
-                                        labels, 
-                                        min_conf=0.5,
-                                        early_exit=False
-                                    )
-                                    
-                                    print(f"Detection complete. Found {len(detected_objects)} objects")
-                                    
-                                    # Count specific objects
-                                    has_amorfo = any(obj['class'].lower() == 'amorfo' and obj['score'] > 0.5 for obj in detected_objects)
-                                    has_chico = any(obj['class'].lower() == 'chico' and obj['score'] > 0.5 for obj in detected_objects)
-                                    has_mediano = any(obj['class'].lower() == 'mediano' and obj['score'] > 0.5 for obj in detected_objects)
-                                    has_grande = any(obj['class'].lower() == 'grande' and obj['score'] > 0.5 for obj in detected_objects)
-                                    
-                                    print("\n=== Detection Results ===")
-                                    print(f"Detected objects: {[obj['class'] for obj in detected_objects]}")
-                                    print(f"Scores: {[obj['score'] for obj in detected_objects]}")
-                                    print(f"Amorfo detected: {has_amorfo}")
-                                    print(f"Chico detected: {has_chico}")
-                                    print(f"Mediano detected: {has_mediano}")
-                                    print(f"Grande detected: {has_grande}")
-                                    
-                                    # Apply detection rules
-                                    if any(obj['class'].lower() == 'amorfo' for obj in detected_objects):  # Changed condition
-                                        actual_part = "Capo tipo 2"
-                                        print("Classified as: Capo tipo 2 (has amorfo)")
-                                    elif has_chico and has_mediano and has_grande:
-                                        actual_part = "Capo tipo 3"
-                                        print("Classified as: Capo tipo 3 (has all three holes)")
-                                    elif len(detected_objects) == 0:
-                                        actual_part = "Capo tipo 1"
-                                        print("Classified as: Capo tipo 1 (no holes detected)")
+                            # Start detection in a separate thread to not block the PLC handler
+                            def process_detection_thread():
+                                try:
+                                    print(f"\n=== Starting detection for car {car_id} ===")
+                                    # Get image based on configured source
+                                    print(f"Image source configured as: {config['image_source']}")
+                                    if config['image_source'] == 'camera':
+                                        print("Capturing image from camera...")
+                                        image_base64 = capture_image()
                                     else:
-                                        actual_part = "Capo no identificado"
-                                        print("Classified as: Capo no identificado (ambiguous pattern)")
-                                        print("Detected objects:", [f"{obj['class']} (score: {obj['score']:.2f})" for obj in detected_objects])
-                                else:
-                                    print("No capo detected - gray percentage below 60%")
-                                    actual_part = "No hay capo"
-                                
-                                # Determine outcome
-                                outcome = "GOOD" if actual_part == expected_part else "NOGOOD"
-                                print(f"\n=== Final Result ===")
-                                print(f"Expected part: {expected_part}")
-                                print(f"Actual part: {actual_part}")
-                                print(f"Outcome: {outcome}")
-                                
-                                print("Sending response to PLC...")
-                                if outcome == "NOGOOD" and 'capo' in actual_part.lower():
-                                    print(f"Sending NOGOOD result to ICS for car {car_id}")
-                                    try:
-                                        # Set a timeout for ICS operations
-                                        start_time = time.time()
-                                        ics_success = False
-                                        
-                                        while time.time() - start_time < ics_timeout:
-                                            try:
-                                                vin = ics.request_vin(car_id)
-                                                if vin:
-                                                    print(f"Retrieved VIN for car_id {car_id}: {vin}")
-                                                    result = ics.send_defect_data(
-                                                        vin=vin,
-                                                        image_base64=image_base64,
-                                                        expected_part=expected_part,
-                                                        actual_part=actual_part
-                                                    )
-                                                    if result:
-                                                        print(f"Successfully sent defect data to ICS for car_id: {car_id}")
-                                                        ics_success = True
-                                                        break
-                                            except Exception as ics_error:
-                                                print(f"ICS communication error: {str(ics_error)}")
-                                                time.sleep(0.5)  # Brief pause before retry
-                                        
-                                        if not ics_success:
-                                            print(f"Failed to send data to ICS for car {car_id} after {ics_timeout} seconds")
-                                    except Exception as e:
-                                        print(f"Error in ICS communication: {str(e)}")
-                                    finally:
-                                        # Always send PLC response, regardless of ICS status
-                                        print("Sending PLC response after ICS attempt")
-                                        send_plc_response(plc_socket, False)
-                                else:
-                                    # Send PLC response for non-NOGOOD cases
-                                    print("Sending PLC response for non-NOGOOD case")
-                                    send_plc_response(plc_socket, outcome == "GOOD")
+                                        print(f"Loading sample image: {config['image_source']}")
+                                        image_base64 = load_sample_image(config['image_source'])
 
-                                # Mark car as processed after sending response
-                                processed_cars.add(car_id)
-                                print(f"Car {car_id} processing complete")
-                                
-                            except Exception as e:
-                                print(f"ERROR during detection process: {str(e)}")
-                                car = CarLog.query.filter_by(car_id=car_id).first()
-                                if car:
-                                    car.actual_part = "Error en detección"
-                                    car.outcome = "Error"
-                                    db.session.commit()
+                                    if not image_base64:
+                                        raise Exception("Failed to get image")
+
+                                    print("Calculating gray percentage...")
+                                    gray_percentage = calculate_gray_percentage(image_base64)
+                                    print(f"Gray percentage calculated: {gray_percentage:.2f}%")
+                                    
+                                    # Initialize variables
+                                    actual_part = None
+                                    detected_objects = []
+                                    result_image = image_base64  # Default to original image
+                                    
+                                    if gray_percentage >= 60:
+                                        print("Gray percentage >= 60%, proceeding with detection...")
+                                        # Load model and labels
+                                        model, labels = get_model_and_labels()
+                                        
+                                        # Perform detection
+                                        print("Running object detection...")
+                                        result_image, detected_objects = tflite_detect_image(
+                                            model, 
+                                            image_base64, 
+                                            labels, 
+                                            min_conf=0.5,
+                                            early_exit=False
+                                        )
+                                        
+                                        print(f"Detection complete. Found {len(detected_objects)} objects")
+                                        
+                                        # Count specific objects
+                                        has_amorfo = any(obj['class'].lower() == 'amorfo' and obj['score'] > 0.5 for obj in detected_objects)
+                                        has_chico = any(obj['class'].lower() == 'chico' and obj['score'] > 0.5 for obj in detected_objects)
+                                        has_mediano = any(obj['class'].lower() == 'mediano' and obj['score'] > 0.5 for obj in detected_objects)
+                                        has_grande = any(obj['class'].lower() == 'grande' and obj['score'] > 0.5 for obj in detected_objects)
+                                        
+                                        print("\n=== Detection Results ===")
+                                        print(f"Detected objects: {[obj['class'] for obj in detected_objects]}")
+                                        print(f"Scores: {[obj['score'] for obj in detected_objects]}")
+                                        print(f"Amorfo detected: {has_amorfo}")
+                                        print(f"Chico detected: {has_chico}")
+                                        print(f"Mediano detected: {has_mediano}")
+                                        print(f"Grande detected: {has_grande}")
+                                        
+                                        # Apply detection rules
+                                        if any(obj['class'].lower() == 'amorfo' for obj in detected_objects):
+                                            actual_part = "Capo tipo 2"
+                                            print("Classified as: Capo tipo 2 (has amorfo)")
+                                        elif has_chico and has_mediano and has_grande:
+                                            actual_part = "Capo tipo 3"
+                                            print("Classified as: Capo tipo 3 (has all three holes)")
+                                        elif len(detected_objects) == 0:
+                                            actual_part = "Capo tipo 1"
+                                            print("Classified as: Capo tipo 1 (no holes detected)")
+                                        else:
+                                            actual_part = "Capo no identificado"
+                                            print("Classified as: Capo no identificado (ambiguous pattern)")
+                                            print("Detected objects:", [f"{obj['class']} (score: {obj['score']:.2f})" for obj in detected_objects])
+                                    else:
+                                        print("No capo detected - gray percentage below 60%")
+                                        actual_part = "No hay capo"
+                                    
+                                    # Determine outcome
+                                    outcome = "GOOD" if actual_part == expected_part else "NOGOOD"
+                                    print(f"\n=== Final Result ===")
+                                    print(f"Expected part: {expected_part}")
+                                    print(f"Actual part: {actual_part}")
+                                    print(f"Outcome: {outcome}")
+                                    
+                                    # Update car in database with results - IMPORTANTE: Usar app_context aquí
+                                    with app.app_context():
+                                        car = CarLog.query.filter_by(car_id=car_id).first()
+                                        if car:
+                                            car.actual_part = actual_part
+                                            car.outcome = outcome
+                                            car.original_image = image_base64
+                                            car.result_image = result_image
+                                            car.gray_percentage = gray_percentage
+                                            db.session.commit()
+                                            print(f"Database updated with detection results for car {car_id}")
+                                        else:
+                                            print(f"WARNING: Car {car_id} not found in database")
+                                    
+                                    # Notify frontend of completion - No necesita app_context
+                                    socketio.emit('detection_complete', {
+                                        'car_id': car_id,
+                                        'actual_part': actual_part,
+                                        'outcome': outcome,
+                                        'original_image': image_base64,
+                                        'result_image': result_image
+                                    })
+                                    
+                                    # Send response to PLC
+                                    print("Sending response to PLC...")
+                                    if outcome == "NOGOOD" and 'capo' in actual_part.lower():
+                                        print(f"Sending NOGOOD result to ICS for car {car_id}")
+                                        
+                                        # Primero enviar respuesta al PLC inmediatamente
+                                        print("Sending PLC response first (NOGOOD)")
+                                        send_plc_response(plc_socket, False)
+                                        
+                                        # Luego enviar datos a ICS en un hilo separado
+                                        def send_to_ics_thread():
+                                            try:
+                                                # Set a timeout for ICS operations
+                                                start_time = time.time()
+                                                ics_success = False
+                                                
+                                                while time.time() - start_time < ics_timeout:
+                                                    try:
+                                                        vin = ics.request_vin(car_id)
+                                                        if vin:
+                                                            print(f"Retrieved VIN for car_id {car_id}: {vin}")
+                                                            result = ics.send_defect_data(
+                                                                vin=vin,
+                                                                image_base64=image_base64,
+                                                                expected_part=expected_part,
+                                                                actual_part=actual_part
+                                                            )
+                                                            if result:
+                                                                print(f"Successfully sent defect data to ICS for car_id: {car_id}")
+                                                                ics_success = True
+                                                                break
+                                                    except Exception as ics_error:
+                                                        print(f"ICS communication error: {str(ics_error)}")
+                                                        time.sleep(0.5)  # Brief pause before retry
+                                                
+                                                if not ics_success:
+                                                    print(f"Failed to send data to ICS for car {car_id} after {ics_timeout} seconds")
+                                            except Exception as e:
+                                                print(f"Error in ICS communication thread: {str(e)}")
+                                        
+                                        # Iniciar hilo para ICS
+                                        threading.Thread(target=send_to_ics_thread, daemon=True).start()
+                                    else:
+                                        # Send PLC response for non-NOGOOD cases
+                                        print("Sending PLC response for non-NOGOOD case")
+                                        send_plc_response(plc_socket, outcome == "GOOD")
+                                            
+                                except Exception as e:
+                                    print(f"ERROR during detection process: {str(e)}")
+                                    # Usar app_context para actualizar la base de datos en caso de error
+                                    with app.app_context():
+                                        car = CarLog.query.filter_by(car_id=car_id).first()
+                                        if car:
+                                            car.actual_part = "Error en detección"
+                                            car.outcome = "Error"
+                                            db.session.commit()
+                                            print(f"Database updated with error status for car {car_id}")
+                                    # Notificación de error - No necesita app_context
                                     socketio.emit('detection_error', {
                                         'car_id': car_id,
                                         'error': str(e)
                                     })
-                                print("Sending NOGOOD response to PLC due to error")
-                                send_plc_response(plc_socket, False)
-                                processed_cars.add(car_id)  # Mark as processed even on error
-                        
+                            
+                            # Start the detection thread
+                            threading.Thread(target=process_detection_thread, daemon=True).start()
+                            
                         except Exception as e:
-                            print(f"ERROR in database operation: {str(e)}")
-                            traceback.print_exc()
+                            print(f"ERROR during database operations: {str(e)}")
                             db.session.rollback()
                             continue
                             
                 except Exception as e:
                     print(f"ERROR parsing message: {str(e)}")
-                    traceback.print_exc()
                     continue
-            
+                    
             except socket.timeout:
+                # This is normal, just continue waiting
                 continue
             except ConnectionResetError:
-                print("ERROR: PLC connection reset")
-                traceback.print_exc()
+                print("Connection reset by PLC")
                 socketio.emit('connection_status', {'service': 'PLC', 'status': 'Desconectado'})
                 break
             except Exception as e:
-                print(f"ERROR in PLC handler: {str(e)}")
-                traceback.print_exc()
-                try:
-                    socketio.emit('connection_status', {'service': 'PLC', 'status': 'Error'})
-                except:
-                    pass
+                print(f"ERROR receiving data: {str(e)}")
+                socketio.emit('connection_status', {'service': 'PLC', 'status': 'Desconectado'})
                 break
-
+                
         except Exception as e:
-            print(f"ERROR in main PLC handler loop: {str(e)}")
-            traceback.print_exc()
+            print(f"ERROR in main loop: {str(e)}")
+            socketio.emit('connection_status', {'service': 'PLC', 'status': 'Desconectado'})
             break
-    
-    print("\n=== PLC handler terminating ===")
-    print("Cleaning up connection...")
-    is_connected = False
-    plc_connection = None
+            
+    print("PLC response handler exiting")
     try:
         plc_socket.close()
-        print("Socket closed successfully")
     except:
-        print("Error closing socket")
-    print("PLC handler terminated")
+        pass
 
 def connect_to_plc():
     global client_socket, is_connected, plc_connection
 
-    if plc_connection is not None:
+    if plc_connection is not None and is_connected:
         print("Already connected to PLC. Ignoring new connection attempt.")
         return
+    
+    # Reset connection state
+    is_connected = False
+    if plc_connection is not None:
+        try:
+            plc_connection.close()
+        except:
+            pass
+        plc_connection = None
 
     host = config["plc_host"]
     port = config["plc_port"]
@@ -622,6 +669,7 @@ def connect_to_plc():
     retry_delay = 2  # seconds
     
     for attempt in range(max_retries):
+        conn = None
         try:
             print(f"\n=== PLC Connection Attempt {attempt + 1}/{max_retries} ===")
             print(f"Trying to connect to PLC at {host}:{port}")
@@ -633,6 +681,7 @@ def connect_to_plc():
             # Attempt connection
             conn.connect((host, port))
             
+            # Connection successful
             print("Successfully connected to PLC")
             client_socket = conn
             plc_connection = conn
@@ -679,61 +728,63 @@ def connect_to_plc():
         
         # Clean up failed connection attempt
         try:
-            if 'conn' in locals():
+            if conn is not None:
                 conn.close()
         except:
             pass
         
+        # Ensure state is reset
+        is_connected = False
+        plc_connection = None
+        
         if attempt < max_retries - 1:  # Don't sleep after last attempt
             print(f"Retrying in {retry_delay} seconds...")
             time.sleep(retry_delay)
-    
-    print("\n=== PLC Connection Failed ===")
-    print(f"Could not connect to PLC at {host}:{port} after {max_retries} attempts")
-    is_connected = False
-    return False
 
 def retry_connection():
     global client_socket, is_connected, plc_connection, galc_connection
     
     print("Retrying connection...")
     
-    # Close existing connections
+    # Cerrar conexiones existentes
     if plc_connection:
         try:
+            print("Closing existing PLC connection...")
             plc_connection.shutdown(socket.SHUT_RDWR)
             plc_connection.close()
-        except:
-            pass
-        plc_connection = None
-        
+        except Exception as e:
+            print(f"Error closing PLC connection: {str(e)}")
+        finally:
+            plc_connection = None
+            is_connected = False
+    
     if galc_connection:
         try:
+            print("Closing existing GALC connection...")
             galc_connection.shutdown(socket.SHUT_RDWR)
             galc_connection.close()
-        except:
-            pass
-        galc_connection = None
-        
-    if client_socket:
-        try:
-            client_socket.shutdown(socket.SHUT_RDWR)
-            client_socket.close()
-        except:
-            pass
-        client_socket = None
+        except Exception as e:
+            print(f"Error closing GALC connection: {str(e)}")
+        finally:
+            galc_connection = None
     
-    is_connected = False
-    socketio.emit('connection_status', {'status': False})
+    # Intentar nuevas conexiones
+    print("Starting new connection process...")
+    socketio.emit('connection_status', {'service': 'PLC', 'status': 'Reconectando'})
     
-    # Wait a moment for connections to close
+    # Esperar un momento antes de intentar la reconexión
     time.sleep(1)
     
-    # Attempt to reconnect
-    if config['connection_type'] == "GALC":
-        connect_to_galc()
-    else:
-        connect_to_plc()
+    # Intentar primero el PLC
+    plc_success = connect_to_plc()
+    
+    # Luego GALC si está configurado
+    galc_success = False
+    if config.get('use_galc', False):
+        galc_success = connect_to_galc()
+    
+    # Devolver éxito si al menos un servicio se conectó
+    return plc_success or galc_success
 
 # Start the appropriate connection based on connection type
 @socketio.on('connect')
