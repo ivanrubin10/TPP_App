@@ -19,6 +19,9 @@
       <li :class="{ 'active': routePath === '/config' }">
         <router-link to="/config">Configuración</router-link>
       </li>
+      <li :class="{ 'active': routePath === '/feedback' }">
+        <router-link to="/feedback">Feedback</router-link>
+      </li>
     </ul>
 
   </div>

@@ -70,7 +70,7 @@
 </template>
 
 <script setup lang="ts">
-import { useBackendApi } from '../composables/useBackendApi'
+import { useBackendApi } from '../composables/useBackendApi';
 import { onMounted, ref, computed } from 'vue';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement } from 'chart.js'
 import { Pie, Line } from 'vue-chartjs'
@@ -88,8 +88,8 @@ const {
 type Item = {
     id: string;
     expectedPart: string;
-    actualPart: string;
-    outcome: string;
+    actualPart?: string;
+    outcome?: string;
     image: string;
     resultImage: string;
     date: string;
@@ -115,7 +115,7 @@ const pieChartOptions = {
         legend: {
             position: 'bottom' as const,
             labels: {
-                color: 'var(--text-100)'
+                color: 'white'
             },
             marginbottom: '20px',
         }
@@ -151,7 +151,7 @@ const lineChartData = computed(() => {
 const lineChartOptions = {
     responsive: true,
     maintainAspectRatio: false,
-    color: 'var(--text-100)',
+    color: 'white',
     scales: {
         y: {
             beginAtZero: true,
@@ -159,7 +159,7 @@ const lineChartOptions = {
                 color: 'rgba(255, 255, 255, 0.3)'
             },
             ticks: {
-                color: 'var(--text-100)',
+                color: 'white',
                 font: {
                     size: 12,
                     family: 'Arial'
@@ -171,7 +171,7 @@ const lineChartOptions = {
                 color: 'rgba(255, 255, 255, 0.3)'
             },
             ticks: {
-                color: 'var(--text-100)',
+                color: 'white',
                 font: {
                     size: 12,
                     family: 'Arial'
@@ -182,7 +182,7 @@ const lineChartOptions = {
     plugins: {
         legend: {
             labels: {
-                color: 'var(--text-100)',
+                color: 'white',
                 font: {
                     size: 12,
                     family: 'Arial'
@@ -235,7 +235,7 @@ onMounted(() => {
 }
 
 .summary-card {
-    background-color: var(--bg-400);
+    background-color: var(--bg-300);
     padding: 1.5rem;
     border-radius: 8px;
     text-align: center;
@@ -259,7 +259,7 @@ onMounted(() => {
 }
 
 .chart-container {
-    background-color: var(--bg-400);
+    background-color: var(--bg-300);
     padding: 1.5rem;
     border-radius: 8px;
     height: 300px;
@@ -282,7 +282,7 @@ onMounted(() => {
 
 .table-container {
     grid-column: 1 / -1;
-    background-color: var(--bg-400);
+    background-color: var(--bg-300);
     padding: 1.5rem;
     border-radius: 8px;
     overflow-x: auto;

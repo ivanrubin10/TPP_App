@@ -26,8 +26,10 @@ socket.on('disconnect', () => {
   --text-200: #e0e0e0;
   --accent-100: #4a90e2;
   --accent-200: #357abd;
-  --good-100: #4caf50;
-  --no-good-100: #f44336;
+  --good-100: #29a25f;
+  --good-200: #29a25f;
+  --no-good-100: #b52424;
+  --no-good-200: #b52424;
 }
 
 body {

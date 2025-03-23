@@ -51,14 +51,14 @@ watch(
 );
 
 function getOutcomeStyle(outcome: string) {
-    if (!outcome) return 'background-color: var(--bg-300)';
+    if (!outcome) return 'background-color: var(--bg-300) !important';
     
     if (outcome === 'GOOD') {
-        return 'background-image: linear-gradient(180deg, var(--good-100) 0%, var(--good-200) 100%)';
+        return 'background-color: var(--good-100) !important';
     } else if (outcome === 'NOGOOD') {
-        return 'background-image: linear-gradient(180deg, var(--no-good-100) 0%, var(--no-good-200) 100%)';
+        return 'background-color: var(--no-good-100) !important';
     }
-    return 'background-color: var(--bg-300)';
+    return 'background-color: var(--bg-300) !important';
 }
 </script>
 

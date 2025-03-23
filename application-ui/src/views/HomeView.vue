@@ -24,16 +24,16 @@
         <template v-else>
         <FalseOutcomeButton v-if="!selectedItem.resultImage" @click="handleClick" text="Detectar" />
         <FalseOutcomeButton v-else @click="handleClick" text="Detectar nuevamente" />
-        <FalseOutcomeButton v-show="selectedItem.outcome === 'NOGOOD'" @click="noEsDefecto(selectedItem)"
+        <FalseOutcomeButton v-show="selectedItem.outcome === 'NOGOOD' && !selectedItem.hasFeedback" @click="noEsDefecto(selectedItem)"
           text="No es defecto" />
-        <FalseOutcomeButton v-show="selectedItem.outcome === 'GOOD'" @click="esDefecto(selectedItem)"
+        <FalseOutcomeButton v-show="selectedItem.outcome === 'GOOD' && !selectedItem.hasFeedback" @click="esDefecto(selectedItem)"
           text="Es defecto" />
         </template>
       </div>
     </div>
     <div class="container" v-else>
       <div class="no-item-selected">
-        Por favor seleccione un coche de la lista para ver su estado
+        Por favor seleccione un auto de la lista para ver su estado
       </div>
     </div>
     <CarsFooter 
@@ -57,6 +57,7 @@ import InspectionResults from '../components/InspectionResults.vue'
 import { onBeforeUnmount, onMounted, ref, onUnmounted, nextTick } from 'vue';
 import socket from '../composables/socket';
 import axios from 'axios';
+import type { BackendApi } from '../types/backendApi';
 
 const baseUrl = 'http://localhost:5000'
 
@@ -71,6 +72,7 @@ interface Item {
   grayPercentage?: number;
   isQueued: boolean;
   isProcessing: boolean;
+  hasFeedback?: boolean;
 }
 
 interface CaptureResponse {
@@ -120,7 +122,9 @@ const {
   retryConnection,
   sendToICS,
   getConfig,
-  saveConfig } = useBackendApi()
+  saveConfig,
+  addFeedback,
+  checkFeedbackExists } = useBackendApi() as any;
 
 let clickHandle = false;
 
@@ -287,7 +291,8 @@ onMounted(async () => {
         resultImage: '',
         date: car.date,
         isQueued: false,
-        isProcessing: true
+        isProcessing: true,
+        hasFeedback: false
     };
 
     // Add the car to the list and sort
@@ -316,7 +321,8 @@ onMounted(async () => {
         outcome: result.outcome,
         isProcessing: false,
         image: result.original_image ? `data:image/jpeg;base64,${result.original_image}` : '',
-        resultImage: result.result_image ? `data:image/jpeg;base64,${result.result_image}` : ''
+        resultImage: result.result_image ? `data:image/jpeg;base64,${result.result_image}` : '',
+        hasFeedback: false
       };
       
       // Update in items array
@@ -348,7 +354,8 @@ onMounted(async () => {
         ...items.value[carIndex],
         actualPart: "Error en detección",
         outcome: "Error",
-        isProcessing: false
+        isProcessing: false,
+        hasFeedback: false
       };
       
       // Update in items array
@@ -369,7 +376,7 @@ onMounted(async () => {
     errorMessage.value = `Error en la detección: ${error.error}`;
     setTimeout(() => errorMessage.value = '', 5000);
   });
-
+  
   // Listen for new queued cars from GALC
   socket.on('new_queued_car', async (queuedCar: any) => {
     console.log('New queued car received:', queuedCar);
@@ -382,12 +389,13 @@ onMounted(async () => {
       resultImage: '',
       date: queuedCar.date,
       isQueued: true,
-      isProcessing: false
+      isProcessing: false,
+      hasFeedback: false
     });
     // Sort items whenever a new car is added
     items.value = sortItems(items.value);
   });
-
+  
   // Listen for auto-detection triggered events
   socket.on('auto_detection_triggered', (data: any) => {
     console.log('Auto-detection triggered for car:', data.car_id);
@@ -463,7 +471,8 @@ onMounted(async () => {
             date: updatedCar.date,
             grayPercentage: updatedCar.gray_percentage,
             isQueued: false,
-            isProcessing: false
+            isProcessing: false,
+            hasFeedback: false
         };
         
         console.log('Updating car with fresh data:', updatedItem);
@@ -525,9 +534,30 @@ onMounted(async () => {
           resultImage: item.result_image ? `data:image/jpeg;base64,${item.result_image}` : '',
           date: item.date,
           isQueued: false,
-          isProcessing: false
+          isProcessing: false,
+          hasFeedback: false
         });
       });
+      
+      // Check feedback status for each car
+      setTimeout(async () => {
+        for (const item of items.value) {
+          if (!item.isQueued) {
+            try {
+              const feedbackStatus = await checkFeedbackExists(item.id);
+              if (feedbackStatus.exists) {
+                // Update the item in the items array
+                const index = items.value.findIndex(i => i.id === item.id);
+                if (index !== -1) {
+                  items.value[index] = { ...items.value[index], hasFeedback: true };
+                }
+              }
+            } catch (error) {
+              console.error(`Error checking feedback for car ${item.id}:`, error);
+            }
+          }
+        }
+      }, 1000);
     }),
     fetchQueuedCars().then((queuedCars) => {
       console.log('Fetched queued cars:', queuedCars);
@@ -541,7 +571,8 @@ onMounted(async () => {
           resultImage: '',
           date: car.date,
           isQueued: true,
-          isProcessing: false
+          isProcessing: false,
+          hasFeedback: false
         });
       });
     })
@@ -644,11 +675,114 @@ const handleClick = async () => {
   }
 }
 
-function esDefecto(item: any) {
+async function esDefecto(item: any) {
   console.log("es defecto", item);
+  try {
+    // Mark as false negative (system said GOOD but it's actually NOGOOD/defective)
+    isLoading.value = true;
+    loadingMessage.value = 'Guardando feedback...';
+    
+    // Check if feedback already exists for this car
+    const feedbackCheck = await checkFeedbackExists(item.id);
+    if (feedbackCheck.exists) {
+      errorMessage.value = 'Ya existe un feedback registrado para este auto';
+      setTimeout(() => errorMessage.value = '', 5000);
+      return;
+    }
+    
+    const feedbackData = {
+      car_id: item.id,
+      expected_part: item.expectedPart,
+      actual_part: item.actualPart,
+      original_outcome: 'GOOD',
+      real_outcome: 'NOGOOD',
+      feedback_note: 'Marcado como defecto por el usuario'
+    };
+    
+    await addFeedback(feedbackData);
+    
+    // Update UI - remove the button for this car
+    const index = items.value.findIndex(i => i.id === item.id);
+    if (index !== -1) {
+      // Clone the item and update it
+      const updatedItems = [...items.value];
+      
+      // If the selected item is the one we just gave feedback on, update it
+      if (selectedItem.value && selectedItem.value.id === item.id) {
+        selectedItem.value = { ...selectedItem.value, hasFeedback: true };
+      }
+      
+      // Update the items array
+      updatedItems[index] = { ...updatedItems[index], hasFeedback: true };
+      items.value = updatedItems;
+    }
+    
+    // Show success message
+    errorMessage.value = 'Feedback guardado correctamente';
+    setTimeout(() => errorMessage.value = '', 5000);
+  } catch (error) {
+    console.error('Error saving feedback:', error);
+    errorMessage.value = 'Error al guardar el feedback: ' + (error instanceof Error ? error.message : 'Error desconocido');
+    setTimeout(() => errorMessage.value = '', 5000);
+  } finally {
+    isLoading.value = false;
+    loadingMessage.value = '';
+  }
 }
-function noEsDefecto(item: any) {
+
+async function noEsDefecto(item: any) {
   console.log("no es defecto", item);
+  try {
+    // Mark as false positive (system said NOGOOD but it's actually GOOD/not defective)
+    isLoading.value = true;
+    loadingMessage.value = 'Guardando feedback...';
+    
+    // Check if feedback already exists for this car
+    const feedbackCheck = await checkFeedbackExists(item.id);
+    if (feedbackCheck.exists) {
+      errorMessage.value = 'Ya existe un feedback registrado para este auto';
+      setTimeout(() => errorMessage.value = '', 5000);
+      return;
+    }
+    
+    const feedbackData = {
+      car_id: item.id,
+      expected_part: item.expectedPart,
+      actual_part: item.actualPart,
+      original_outcome: 'NOGOOD',
+      real_outcome: 'GOOD',
+      feedback_note: 'Marcado como no defecto por el usuario'
+    };
+    
+    await addFeedback(feedbackData);
+    
+    // Update UI - remove the button for this car
+    const index = items.value.findIndex(i => i.id === item.id);
+    if (index !== -1) {
+      // Clone the item and update it
+      const updatedItems = [...items.value];
+      
+      // If the selected item is the one we just gave feedback on, update it
+      if (selectedItem.value && selectedItem.value.id === item.id) {
+        selectedItem.value = { ...selectedItem.value, hasFeedback: true };
+      }
+      
+      // Update the items array
+      updatedItems[index] = { ...updatedItems[index], hasFeedback: true };
+      items.value = updatedItems;
+    }
+    
+    // Show success message
+    errorMessage.value = 'Feedback guardado correctamente';
+    setTimeout(() => errorMessage.value = '', 5000);
+  } catch (error) {
+    console.error('Error saving feedback:', error);
+    errorMessage.value = 'Error al guardar el feedback: ' + (error instanceof Error ? error.message : 'Error desconocido');
+    setTimeout(() => errorMessage.value = '', 5000);
+  } finally {
+    isLoading.value = false;
+    loadingMessage.value = '';
+  }
 }
 
 const handleRetryConnection = async () => {

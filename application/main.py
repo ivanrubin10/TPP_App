@@ -101,6 +101,24 @@ class QueuedCar(db.Model):
     expected_part = db.Column(db.String(200), nullable=False)
     is_processed = db.Column(db.Boolean, default=False)
 
+# Define FeedbackLog model for storing false positive/negative feedback
+class FeedbackLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    car_id = db.Column(db.String(50), nullable=False)
+    expected_part = db.Column(db.String(200), nullable=False)
+    actual_part = db.Column(db.String(200), nullable=False)
+    original_outcome = db.Column(db.String(50), nullable=False)
+    real_outcome = db.Column(db.String(50), nullable=False)
+    original_image = db.Column(db.Text, nullable=True)
+    result_image = db.Column(db.Text, nullable=True)
+    feedback_date = db.Column(db.String(50), nullable=False)
+    feedback_note = db.Column(db.Text, nullable=True)
+    
+    # Add index for faster lookups
+    __table_args__ = (
+        db.Index('idx_feedback_car_id', 'car_id'),
+    )
+
 class CarLogSchema(SQLAlchemySchema):
     class Meta:
         model = CarLog
@@ -127,10 +145,29 @@ class QueuedCarSchema(SQLAlchemySchema):
     expected_part = auto_field()
     is_processed = auto_field()
 
+class FeedbackLogSchema(SQLAlchemySchema):
+    class Meta:
+        model = FeedbackLog
+        load_instance = True
+
+    id = auto_field()
+    car_id = auto_field()
+    expected_part = auto_field()
+    actual_part = auto_field()
+    original_outcome = auto_field()
+    real_outcome = auto_field()
+    original_image = auto_field()
+    result_image = auto_field()
+    feedback_date = auto_field()
+    feedback_note = auto_field()
+
+# Initialize schemas
 car_log_schema = CarLogSchema()
 car_logs_schema = CarLogSchema(many=True)
 queued_car_schema = QueuedCarSchema()
 queued_cars_schema = QueuedCarSchema(many=True)
+feedback_log_schema = FeedbackLogSchema()
+feedback_logs_schema = FeedbackLogSchema(many=True)
 
 # Initialize the database tables
 with app.app_context():
@@ -1373,6 +1410,92 @@ def load_sample_image(image_type):
         cv2.putText(error_img, f"Error loading image: {str(e)}", (50, 240), font, 0.8, (0, 0, 255), 2)
         _, buffer = cv2.imencode('.jpg', error_img)
         return base64.b64encode(buffer).decode('utf-8')
+
+# Add feedback for false positive/negative
+@app.route('/add-feedback', methods=['POST'])
+def add_feedback():
+    """Add feedback for false positive/negative detections"""
+    try:
+        data = request.get_json()
+        
+        # Validate required fields
+        required_fields = ['car_id', 'expected_part', 'actual_part', 'original_outcome', 'real_outcome']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({'error': f'Missing required field: {field}'}), 400
+        
+        # Check if we already have feedback for this car
+        existing_feedback = FeedbackLog.query.filter_by(car_id=data['car_id']).first()
+        if existing_feedback:
+            return jsonify({'error': 'Feedback already exists for this car', 'feedback': feedback_log_schema.dump(existing_feedback)}), 409
+        
+        # Get original car data to copy images
+        car_log = CarLog.query.filter_by(car_id=data['car_id']).first()
+        if not car_log:
+            return jsonify({'error': 'Car not found in logs'}), 404
+        
+        # Create new feedback log
+        new_feedback = FeedbackLog(
+            car_id=data['car_id'],
+            expected_part=data['expected_part'],
+            actual_part=data['actual_part'],
+            original_outcome=data['original_outcome'],
+            real_outcome=data['real_outcome'],
+            original_image=car_log.original_image if car_log.original_image else None,
+            result_image=car_log.result_image if car_log.result_image else None,
+            feedback_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            feedback_note=data.get('feedback_note', '')
+        )
+        
+        db.session.add(new_feedback)
+        db.session.commit()
+        
+        return jsonify({'message': 'Feedback added successfully', 'id': new_feedback.id, 'feedback': feedback_log_schema.dump(new_feedback)})
+    except Exception as e:
+        print(f"Error adding feedback: {str(e)}")
+        print(traceback.format_exc())  # Add this line to print the full traceback
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+# Get feedback logs
+@app.route('/feedback-logs', methods=['GET'])
+def get_feedback_logs():
+    """Get all feedback logs with optional filtering"""
+    try:
+        # Check for filter parameters
+        feedback_type = request.args.get('type')
+        
+        # Base query
+        query = FeedbackLog.query
+        
+        # Apply filters if present
+        if feedback_type == 'false_positive':
+            # False positive: system said NOGOOD (defect) but user marked as GOOD (no defect)
+            query = query.filter(FeedbackLog.original_outcome == 'NOGOOD', FeedbackLog.real_outcome == 'GOOD')
+        elif feedback_type == 'false_negative':
+            # False negative: system said GOOD (no defect) but user marked as NOGOOD (defect)
+            query = query.filter(FeedbackLog.original_outcome == 'GOOD', FeedbackLog.real_outcome == 'NOGOOD')
+        
+        # Get the results
+        feedback_logs = query.all()
+        
+        return jsonify(feedback_logs_schema.dump(feedback_logs))
+    except Exception as e:
+        print(f"Error getting feedback logs: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/check-feedback/<car_id>', methods=['GET'])
+def check_feedback(car_id):
+    """Check if feedback exists for a specific car"""
+    try:
+        feedback = FeedbackLog.query.filter_by(car_id=car_id).first()
+        if feedback:
+            return jsonify({'exists': True, 'feedback': feedback_log_schema.dump(feedback)})
+        else:
+            return jsonify({'exists': False})
+    except Exception as e:
+        print(f"Error checking feedback: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)

@@ -1,6 +1,27 @@
 import axios from 'axios'
 import { ref } from 'vue'
 
+/**
+ * @typedef {Object} BackendApi
+ * @property {Function} captureImage - Captures an image and performs detection
+ * @property {Array} detectedObjects - Detected objects in the latest capture
+ * @property {Function} fetchLogs - Fetches all logs from the database
+ * @property {Function} checkCarExists - Checks if a car exists in the database
+ * @property {Function} updateItem - Updates an item in the database
+ * @property {Function} addLog - Adds a new log to the database
+ * @property {Function} retryConnection - Retries the connection to the PLC
+ * @property {Function} sendToICS - Sends data to the ICS system
+ * @property {Function} getConfig - Gets the current configuration
+ * @property {Function} saveConfig - Saves the configuration
+ * @property {Function} addFeedback - Adds user feedback about a detection
+ * @property {Function} getFeedbackLogs - Fetches feedback logs with optional filtering
+ * @property {Function} checkFeedbackExists - Checks if feedback exists for a car
+ */
+
+/**
+ * Hook for interacting with the backend API
+ * @returns {BackendApi} The backend API functions
+ */
 export function useBackendApi() {
   const baseUrl = 'http://localhost:5000'
 
@@ -104,6 +125,47 @@ export function useBackendApi() {
     }
   }
 
+  const addFeedback = async (feedbackData) => {
+    try {
+      const response = await axios.post(`${baseUrl}/add-feedback`, feedbackData)
+      return response.data
+    } catch (error) {
+      console.error('Error adding feedback:', error)
+      throw error
+    }
+  }
+
+  const getFeedbackLogs = async (filters = {}) => {
+    try {
+      let url = `${baseUrl}/feedback-logs`
+      
+      // Add query parameters if filters are provided
+      if (Object.keys(filters).length > 0) {
+        const params = new URLSearchParams()
+        for (const [key, value] of Object.entries(filters)) {
+          if (value) params.append(key, value)
+        }
+        url += `?${params.toString()}`
+      }
+      
+      const response = await axios.get(url)
+      return response.data
+    } catch (error) {
+      console.error('Error fetching feedback logs:', error)
+      throw error
+    }
+  }
+
+  const checkFeedbackExists = async (carId) => {
+    try {
+      const response = await axios.get(`${baseUrl}/check-feedback/${carId}`)
+      return response.data
+    } catch (error) {
+      console.error('Error checking feedback existence:', error)
+      throw error
+    }
+  }
+
   const updateItem = async (item) => {
     try {
       console.log('Starting update item request with data:', {
@@ -142,7 +204,7 @@ export function useBackendApi() {
         throw new Error('La solicitud tardó demasiado tiempo en completarse');
       }
       if (error.response?.status === 404) {
-        throw new Error('No se encontró el coche en la base de datos');
+        throw new Error('No se encontró el auto en la base de datos');
       }
       throw error;
     }
@@ -211,5 +273,8 @@ export function useBackendApi() {
     saveConfig,
     retryConnection,
     sendToICS,
+    addFeedback,
+    getFeedbackLogs,
+    checkFeedbackExists,
   }
 }

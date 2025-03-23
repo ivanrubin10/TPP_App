@@ -23,12 +23,12 @@
   --primary-100:#1F3A5F;
   --primary-200:#4d648d;
   --primary-300:#acc2ef;
-  --accent-100:#FF3D3D;
+  --accent-100:#8a4a4a;
   --accent-150: #ff7171;
-  --good-100:#007032;
-  --good-200:#00A349;
-  --no-good-100: #A80000;
-  --no-good-200: #FA0000;
+  --good-100:#4b8e69;
+  --good-200:#4b8e69;
+  --no-good-100: #8a4a4a;
+  --no-good-200: #8a4a4a;
   --accent-200:#ffe0c8;
   --text-100:#FFFFFF;
   --text-200:#e0e0e0;
@@ -45,8 +45,8 @@
   --butterfly-bush: #665190;
   --tapestry: #9f5095;
   --cranberry: #d44e86;
-  --good-green: #4b9555;
-  --bad-red: #b91c1c;
+  --good-green: #4b8e69;
+  --bad-red: #8a4a4a;
 }
 
 /* semantic color variables for this project */

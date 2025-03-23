@@ -12,7 +12,8 @@ defineProps({
         required: true
     },
     style: {
-        type: String
+        type: String,
+        default: ''
     }
 });
 </script>
