@@ -190,6 +190,7 @@ config = {
     "galc_port": 54321,       # Default GALC port
     "image_source": "camera",  # Options: "camera", "no_capo", "capo_tipo_1", "capo_tipo_2", "capo_tipo_3"
     "use_galc": False,        # Added for the new retry_connection method
+    "gray_detection_enabled": True,  # New option to enable/disable gray detection
 }
 
 client_socket = None
@@ -868,47 +869,49 @@ def process_detection(image_base64, expected_part):
     Process image detection with consistent rules.
     Returns tuple of (actual_part, result_image, detected_objects, gray_percentage)
     """
-    # Calculate gray percentage
-    gray_percentage = calculate_gray_percentage(image_base64)
-    print(f"Gray percentage: {gray_percentage:.2f}%")
+    # Calculate gray percentage only if enabled
+    gray_percentage = 0
+    if config.get("gray_detection_enabled", True):
+        gray_percentage = calculate_gray_percentage(image_base64)
+        print(f"Gray percentage: {gray_percentage:.2f}%")
     
     # Initialize variables
     actual_part = None
     detected_objects = []
     result_image = image_base64  # Default to original image
     
-    if gray_percentage < 60:
+    # Skip gray percentage check if disabled
+    if not config.get("gray_detection_enabled", True) or gray_percentage >= 60:
+        # Load model and labels
+        model, labels = get_model_and_labels()
+        
+        # Perform detection
+        result_image, detected_objects = tflite_detect_image(
+            model, 
+            image_base64, 
+            labels, 
+            min_conf=0.5,
+            early_exit=False
+        )
+        
+        # Count specific objects
+        has_amorfo = any(obj['class'].lower() == 'amorfo' and obj['score'] > 0.5 for obj in detected_objects)
+        has_chico = any(obj['class'].lower() == 'chico' and obj['score'] > 0.5 for obj in detected_objects)
+        has_mediano = any(obj['class'].lower() == 'mediano' and obj['score'] > 0.5 for obj in detected_objects)
+        has_grande = any(obj['class'].lower() == 'grande' and obj['score'] > 0.5 for obj in detected_objects)
+        
+        # Apply detection rules
+        if has_amorfo:  # If any amorfo object is detected, it's tipo 2
+            actual_part = "Capo tipo 2"
+        elif has_chico and has_mediano and has_grande:
+            actual_part = "Capo tipo 3"
+        elif len(detected_objects) == 0:
+            actual_part = "Capo tipo 1"
+        else:
+            actual_part = "Capo no identificado"
+    else:
         print("No capo detected - gray percentage below 60%")
         actual_part = "No hay capo"
-        return actual_part, result_image, detected_objects, gray_percentage
-    
-    # Load model and labels
-    model, labels = get_model_and_labels()
-    
-    # Perform detection
-    result_image, detected_objects = tflite_detect_image(
-        model, 
-        image_base64, 
-        labels, 
-        min_conf=0.5,
-        early_exit=False
-    )
-    
-    # Count specific objects
-    has_amorfo = any(obj['class'].lower() == 'amorfo' and obj['score'] > 0.5 for obj in detected_objects)
-    has_chico = any(obj['class'].lower() == 'chico' and obj['score'] > 0.5 for obj in detected_objects)
-    has_mediano = any(obj['class'].lower() == 'mediano' and obj['score'] > 0.5 for obj in detected_objects)
-    has_grande = any(obj['class'].lower() == 'grande' and obj['score'] > 0.5 for obj in detected_objects)
-    
-    # Apply detection rules
-    if has_amorfo:  # If any amorfo object is detected, it's tipo 2
-        actual_part = "Capo tipo 2"
-    elif has_chico and has_mediano and has_grande:
-        actual_part = "Capo tipo 3"
-    elif len(detected_objects) == 0:
-        actual_part = "Capo tipo 1"
-    else:
-        actual_part = "Capo no identificado"
     
     return actual_part, result_image, detected_objects, gray_percentage
 

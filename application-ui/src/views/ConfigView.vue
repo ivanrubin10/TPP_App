@@ -57,6 +57,18 @@
         >
         <span>{{ (minConfThreshold * 100).toFixed(0) }}%</span>
       </div>
+      <div class="input-group">
+        <label>Detección de gris:</label>
+        <div class="toggle-switch">
+          <input 
+            type="checkbox" 
+            v-model="grayDetectionEnabled"
+            @change="updateConfig"
+          >
+          <span class="toggle-slider"></span>
+        </div>
+        <span class="toggle-label">{{ grayDetectionEnabled ? 'Activada' : 'Desactivada' }}</span>
+      </div>
     </div>
     
     <div v-if="saveMessage" class="save-message" :class="{ error: saveError }">
@@ -80,6 +92,7 @@ const plcPort = ref(12345);
 const galcHost = ref('127.0.0.1');
 const galcPort = ref(54321);
 const minConfThreshold = ref(0.7);
+const grayDetectionEnabled = ref(true);
 
 // UI state
 const saveMessage = ref('');
@@ -104,6 +117,7 @@ const loadConfig = async () => {
     galcHost.value = config.galc_host || '127.0.0.1';
     galcPort.value = config.galc_port || 54321;
     minConfThreshold.value = config.min_conf_threshold || 0.7;
+    grayDetectionEnabled.value = config.gray_detection_enabled ?? true;
   } catch (error) {
     console.error('Error loading configuration:', error);
     showMessage('Error al cargar la configuración', true);
@@ -141,7 +155,8 @@ const updateConfig = async () => {
       plc_port: plcPort.value,
       galc_host: galcHost.value,
       galc_port: galcPort.value,
-      min_conf_threshold: minConfThreshold.value
+      min_conf_threshold: minConfThreshold.value,
+      gray_detection_enabled: grayDetectionEnabled.value
     };
     
     await saveConfig(configData);
@@ -261,5 +276,56 @@ h2 {
 
 .save-message.error {
   background-color: var(--no-good-100);
+}
+
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 60px;
+  height: 34px;
+  margin-right: 10px;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--bg-200);
+  transition: .4s;
+  border-radius: 34px;
+}
+
+.toggle-slider:before {
+  position: absolute;
+  content: "";
+  height: 26px;
+  width: 26px;
+  left: 4px;
+  bottom: 4px;
+  background-color: var(--bg-100);
+  transition: .4s;
+  border-radius: 50%;
+}
+
+input:checked + .toggle-slider {
+  background-color: var(--accent-100);
+}
+
+input:checked + .toggle-slider:before {
+  transform: translateX(26px);
+}
+
+.toggle-label {
+  margin-left: 10px;
+  color: var(--text-100);
 }
 </style>
