@@ -503,17 +503,17 @@ def handle_plc_response(plc_socket):
                                     model, 
                                     image_base64, 
                                     labels, 
-                                    min_conf=0.5,
+                                    min_conf=config['min_conf_threshold'],
                                     early_exit=False
                                 )
                                 
                                 print(f"Detection complete. Found {len(detected_objects)} objects")
                                 
                                 # Count specific objects
-                                has_amorfo = any(obj['class'].lower() == 'amorfo' and obj['score'] > 0.5 for obj in detected_objects)
-                                has_chico = any(obj['class'].lower() == 'chico' and obj['score'] > 0.5 for obj in detected_objects)
-                                has_mediano = any(obj['class'].lower() == 'mediano' and obj['score'] > 0.5 for obj in detected_objects)
-                                has_grande = any(obj['class'].lower() == 'grande' and obj['score'] > 0.5 for obj in detected_objects)
+                                has_amorfo = any(obj['class'].lower() == 'amorfo' and obj['score'] > config['min_conf_threshold'] for obj in detected_objects)
+                                has_chico = any(obj['class'].lower() == 'chico' and obj['score'] > config['min_conf_threshold'] for obj in detected_objects)
+                                has_mediano = any(obj['class'].lower() == 'mediano' and obj['score'] > config['min_conf_threshold'] for obj in detected_objects)
+                                has_grande = any(obj['class'].lower() == 'grande' and obj['score'] > config['min_conf_threshold'] for obj in detected_objects)
                                 
                                 print("\n=== Detection Results ===")
                                 print(f"Detected objects: {[obj['class'] for obj in detected_objects]}")
@@ -925,15 +925,15 @@ def process_detection(image_base64, expected_part):
             model, 
             image_base64, 
             labels, 
-            min_conf=0.5,
+            min_conf=config['min_conf_threshold'],
             early_exit=False
         )
         
         # Count specific objects
-        has_amorfo = any(obj['class'].lower() == 'amorfo' and obj['score'] > 0.5 for obj in detected_objects)
-        has_chico = any(obj['class'].lower() == 'chico' and obj['score'] > 0.5 for obj in detected_objects)
-        has_mediano = any(obj['class'].lower() == 'mediano' and obj['score'] > 0.5 for obj in detected_objects)
-        has_grande = any(obj['class'].lower() == 'grande' and obj['score'] > 0.5 for obj in detected_objects)
+        has_amorfo = any(obj['class'].lower() == 'amorfo' and obj['score'] > config['min_conf_threshold'] for obj in detected_objects)
+        has_chico = any(obj['class'].lower() == 'chico' and obj['score'] > config['min_conf_threshold'] for obj in detected_objects)
+        has_mediano = any(obj['class'].lower() == 'mediano' and obj['score'] > config['min_conf_threshold'] for obj in detected_objects)
+        has_grande = any(obj['class'].lower() == 'grande' and obj['score'] > config['min_conf_threshold'] for obj in detected_objects)
         
         # Apply detection rules
         if has_amorfo:  # If any amorfo object is detected, it's tipo 2
@@ -997,15 +997,15 @@ def capture_and_detect():
                 model, 
                 base64_image, 
                 labels, 
-                min_conf=0.5,
+                min_conf=config['min_conf_threshold'],
                 early_exit=False
             )
             
             # Count specific objects
-            has_amorfo = any(obj['class'].lower() == 'amorfo' and obj['score'] > 0.5 for obj in detected_objects)
-            has_chico = any(obj['class'].lower() == 'chico' and obj['score'] > 0.5 for obj in detected_objects)
-            has_mediano = any(obj['class'].lower() == 'mediano' and obj['score'] > 0.5 for obj in detected_objects)
-            has_grande = any(obj['class'].lower() == 'grande' and obj['score'] > 0.5 for obj in detected_objects)
+            has_amorfo = any(obj['class'].lower() == 'amorfo' and obj['score'] > config['min_conf_threshold'] for obj in detected_objects)
+            has_chico = any(obj['class'].lower() == 'chico' and obj['score'] > config['min_conf_threshold'] for obj in detected_objects)
+            has_mediano = any(obj['class'].lower() == 'mediano' and obj['score'] > config['min_conf_threshold'] for obj in detected_objects)
+            has_grande = any(obj['class'].lower() == 'grande' and obj['score'] > config['min_conf_threshold'] for obj in detected_objects)
             
             # Apply detection rules
             if has_amorfo:  # If any amorfo object is detected, it's tipo 2
