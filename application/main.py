@@ -489,10 +489,11 @@ def handle_plc_response(plc_socket):
                             # Initialize variables
                             actual_part = None
                             detected_objects = []
-                            result_image = image_base64  # Default to original image
+                            result_image = image_base64
                             
-                            if gray_percentage >= 60:
-                                print("Gray percentage >= 60%, proceeding with detection...")
+                            # If gray detection is disabled or gray percentage is high enough, proceed with object detection
+                            if not config.get("gray_detection_enabled", True) or gray_percentage >= 60:
+                                print("Proceeding with detection...")
                                 # Load model and labels
                                 model, labels = get_model_and_labels()
                                 
@@ -523,15 +524,17 @@ def handle_plc_response(plc_socket):
                                 print(f"Grande detected: {has_grande}")
                                 
                                 # Apply detection rules
-                                if any(obj['class'].lower() == 'amorfo' for obj in detected_objects):
+                                if has_amorfo:  # If any amorfo object is detected, it's tipo 2
                                     actual_part = "Capo tipo 2"
                                     print("Classified as: Capo tipo 2 (has amorfo)")
                                 elif has_chico and has_mediano and has_grande:
                                     actual_part = "Capo tipo 3"
                                     print("Classified as: Capo tipo 3 (has all three holes)")
-                                elif len(detected_objects) == 0:
-                                    actual_part = "Capo tipo 1"
-                                    print("Classified as: Capo tipo 1 (no holes detected)")
+                                elif not has_chico and not has_mediano and not has_grande:
+                                    if not config.get("gray_detection_enabled", True):
+                                        actual_part = "Capo tipo 1"  # When gray detection is disabled and no objects detected
+                                    else:
+                                        actual_part = "No hay capo"  # When gray detection is enabled and no objects detected
                                 else:
                                     actual_part = "Capo no identificado"
                                     print("Classified as: Capo no identificado (ambiguous pattern)")
@@ -912,7 +915,7 @@ def process_detection(image_base64, expected_part):
     detected_objects = []
     result_image = image_base64  # Default to original image
     
-    # Skip gray percentage check if disabled or if gray percentage is high enough
+    # If gray detection is disabled or gray percentage is high enough, proceed with object detection
     if not config.get("gray_detection_enabled", True) or gray_percentage >= 60:
         # Load model and labels
         model, labels = get_model_and_labels()
@@ -938,7 +941,10 @@ def process_detection(image_base64, expected_part):
         elif has_chico and has_mediano and has_grande:
             actual_part = "Capo tipo 3"
         elif not has_chico and not has_mediano and not has_grande:
-            actual_part = "Capo tipo 1"
+            if not config.get("gray_detection_enabled", True):
+                actual_part = "Capo tipo 1"  # When gray detection is disabled and no objects detected
+            else:
+                actual_part = "No hay capo"  # When gray detection is enabled and no objects detected
         else:
             actual_part = "Capo no identificado"
     else:
@@ -978,9 +984,11 @@ def capture_and_detect():
         # Initialize variables
         actual_part = None
         detected_objects = []
-        result_image = base64_image  # Default to original image
+        result_image = base64_image
         
-        if gray_percentage >= 60:
+        # If gray detection is disabled or gray percentage is high enough, proceed with object detection
+        if not config.get("gray_detection_enabled", True) or gray_percentage >= 60:
+            print("Proceeding with detection...")
             # Load model and labels
             model, labels = get_model_and_labels()
             
@@ -1004,8 +1012,11 @@ def capture_and_detect():
                 actual_part = "Capo tipo 2"
             elif has_chico and has_mediano and has_grande:
                 actual_part = "Capo tipo 3"
-            elif len(detected_objects) == 0:
-                actual_part = "Capo tipo 1"
+            elif not has_chico and not has_mediano and not has_grande:
+                if not config.get("gray_detection_enabled", True):
+                    actual_part = "Capo tipo 1"  # When gray detection is disabled and no objects detected
+                else:
+                    actual_part = "No hay capo"  # When gray detection is enabled and no objects detected
             else:
                 actual_part = "Capo no identificado"
         else:
@@ -1017,31 +1028,57 @@ def capture_and_detect():
         
         # Log the detection in the database if car_id is provided
         if car_id:
-            log_data = {
-                'car_id': car_id,
-                'date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                'expected_part': expected_part,
-                'actual_part': actual_part,
-                'original_image': base64_image,
-                'result_image': result_image,
-                'outcome': outcome,
-                'gray_percentage': gray_percentage
-            }
-            
-            # Always create a new log entry
-            new_log = CarLog(**log_data)
-            db.session.add(new_log)
-            db.session.commit()
-            
-            # Notify frontend to update with final result
-            socketio.emit('detection_complete', {
-                'car_id': car_id,
-                'actual_part': actual_part,
-                'outcome': outcome,
-                'original_image': base64_image,
-                'result_image': result_image,
-                'gray_percentage': gray_percentage
-            })
+            try:
+                # Check if car already exists
+                existing_car = CarLog.query.filter_by(car_id=car_id).first()
+                
+                if existing_car:
+                    # Update existing record
+                    existing_car.date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    existing_car.expected_part = expected_part
+                    existing_car.actual_part = actual_part
+                    existing_car.original_image = base64_image
+                    existing_car.result_image = result_image
+                    existing_car.outcome = outcome
+                    existing_car.gray_percentage = gray_percentage
+                    db.session.commit()
+                else:
+                    # Create new record
+                    log_data = {
+                        'car_id': car_id,
+                        'date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        'expected_part': expected_part,
+                        'actual_part': actual_part,
+                        'original_image': base64_image,
+                        'result_image': result_image,
+                        'outcome': outcome,
+                        'gray_percentage': gray_percentage
+                    }
+                    new_log = CarLog(**log_data)
+                    db.session.add(new_log)
+                    db.session.commit()
+                    
+                # Notify frontend to update with final result
+                socketio.emit('detection_complete', {
+                    'car_id': car_id,
+                    'actual_part': actual_part,
+                    'outcome': outcome,
+                    'original_image': base64_image,
+                    'result_image': result_image,
+                    'gray_percentage': gray_percentage
+                })
+            except Exception as e:
+                db.session.rollback()
+                print(f"Error saving to database: {e}")
+                return jsonify({
+                    'error': f"Error saving to database: {str(e)}",
+                    'image': base64_image,
+                    'objects': detected_objects,
+                    'result_image': result_image,
+                    'gray_percentage': gray_percentage,
+                    'actual_part': actual_part,
+                    'outcome': outcome
+                }), 500
         
         # Calculate processing time
         processing_time = (time.time() - start_time) * 1000
