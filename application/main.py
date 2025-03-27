@@ -373,8 +373,8 @@ def handle_plc_response(plc_socket):
         print("ERROR: Invalid socket provided to handler")
         return
         
-    plc_socket.settimeout(0.5)
-    print("Socket timeout set to 0.5 seconds")
+    plc_socket.settimeout(2.0)  # Increased timeout to 2 seconds
+    print("Socket timeout set to 2.0 seconds")
     
     message_count = 0
     processed_cars = set()  # Keep track of processed car IDs
@@ -404,7 +404,7 @@ def handle_plc_response(plc_socket):
                 print(f"Decoded PLC message: {message}")
                 message_count += 1
                 
-                if len(message) < 8:  # Minimum length: 3 (sequence) + 5 (body) + 2 (capot)
+                if len(message) < 10:  # Minimum length: 3 (sequence) + 5 (body) + 2 (capot)
                     print(f"WARNING: Invalid message format (too short): {message}")
                     continue
                 
@@ -413,7 +413,7 @@ def handle_plc_response(plc_socket):
                     print("\n=== Parsing message ===")
                     sequence = message[:3]  # First 3 digits
                     body = message[3:8]     # Next 5 characters (letter + 4 digits)
-                    capot = message[8:]     # Last 2 digits (01, 05, or 08)
+                    capot = message[8:10]   # Last 2 digits (01, 05, or 08)
                     
                     print(f"Extracted sequence: {sequence}")
                     print(f"Extracted body: {body}")
@@ -439,11 +439,14 @@ def handle_plc_response(plc_socket):
                         random_suffix = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
                         temp_car_id = f"{sequence}-{body}-{capot}-{random_suffix}"
                         
-                        # Check if this ID already exists
-                        existing_car = db.session.query(CarLog).filter_by(car_id=temp_car_id).first()
-                        if not existing_car:
-                            car_id = temp_car_id
-                            break
+                        # Check if this ID already exists in both CarLog and QueuedCar
+                        with app.app_context():
+                            existing_car = db.session.query(CarLog).filter_by(car_id=temp_car_id).first()
+                            existing_queued = db.session.query(QueuedCar).filter_by(car_id=temp_car_id).first()
+                            
+                            if not existing_car and not existing_queued:
+                                car_id = temp_car_id
+                                break
                         attempt += 1
                     
                     if not car_id:
@@ -456,10 +459,187 @@ def handle_plc_response(plc_socket):
                     print(f"Expected part: {expected_part}")
                     print(f"Timestamp: {current_time}")
 
-                    with app.app_context():
-                        print("\n=== Database operations ===")
+                    # Create an event for synchronization
+                    detection_complete = threading.Event()
+                    
+                    # Start detection in a separate thread to not block the PLC handler
+                    def process_detection_thread():
                         try:
-                            # Create new car entry
+                            print(f"\n=== Starting detection for car {car_id} ===")
+                            # Get image based on configured source
+                            print(f"Image source configured as: {config['image_source']}")
+                            if config['image_source'] == 'camera':
+                                print("Capturing image from camera...")
+                                image_base64 = capture_image()
+                            else:
+                                print(f"Loading sample image: {config['image_source']}")
+                                image_base64 = load_sample_image(config['image_source'])
+
+                            if not image_base64:
+                                raise Exception("Failed to get image")
+
+                            print("Calculating gray percentage...")
+                            gray_percentage = calculate_gray_percentage(image_base64)
+                            print(f"Gray percentage calculated: {gray_percentage:.2f}%")
+                            
+                            # Initialize variables
+                            actual_part = None
+                            detected_objects = []
+                            result_image = image_base64  # Default to original image
+                            
+                            if gray_percentage >= 60:
+                                print("Gray percentage >= 60%, proceeding with detection...")
+                                # Load model and labels
+                                model, labels = get_model_and_labels()
+                                
+                                # Perform detection
+                                print("Running object detection...")
+                                result_image, detected_objects = tflite_detect_image(
+                                    model, 
+                                    image_base64, 
+                                    labels, 
+                                    min_conf=0.5,
+                                    early_exit=False
+                                )
+                                
+                                print(f"Detection complete. Found {len(detected_objects)} objects")
+                                
+                                # Count specific objects
+                                has_amorfo = any(obj['class'].lower() == 'amorfo' and obj['score'] > 0.5 for obj in detected_objects)
+                                has_chico = any(obj['class'].lower() == 'chico' and obj['score'] > 0.5 for obj in detected_objects)
+                                has_mediano = any(obj['class'].lower() == 'mediano' and obj['score'] > 0.5 for obj in detected_objects)
+                                has_grande = any(obj['class'].lower() == 'grande' and obj['score'] > 0.5 for obj in detected_objects)
+                                
+                                print("\n=== Detection Results ===")
+                                print(f"Detected objects: {[obj['class'] for obj in detected_objects]}")
+                                print(f"Scores: {[obj['score'] for obj in detected_objects]}")
+                                print(f"Amorfo detected: {has_amorfo}")
+                                print(f"Chico detected: {has_chico}")
+                                print(f"Mediano detected: {has_mediano}")
+                                print(f"Grande detected: {has_grande}")
+                                
+                                # Apply detection rules
+                                if any(obj['class'].lower() == 'amorfo' for obj in detected_objects):
+                                    actual_part = "Capo tipo 2"
+                                    print("Classified as: Capo tipo 2 (has amorfo)")
+                                elif has_chico and has_mediano and has_grande:
+                                    actual_part = "Capo tipo 3"
+                                    print("Classified as: Capo tipo 3 (has all three holes)")
+                                elif len(detected_objects) == 0:
+                                    actual_part = "Capo tipo 1"
+                                    print("Classified as: Capo tipo 1 (no holes detected)")
+                                else:
+                                    actual_part = "Capo no identificado"
+                                    print("Classified as: Capo no identificado (ambiguous pattern)")
+                                    print("Detected objects:", [f"{obj['class']} (score: {obj['score']:.2f})" for obj in detected_objects])
+                            else:
+                                print("No capo detected - gray percentage below 60%")
+                                actual_part = "No hay capo"
+                            
+                            # Determine outcome
+                            outcome = "GOOD" if actual_part == expected_part else "NOGOOD"
+                            print(f"\n=== Final Result ===")
+                            print(f"Expected part: {expected_part}")
+                            print(f"Actual part: {actual_part}")
+                            print(f"Outcome: {outcome}")
+                            
+                            # Update car in database with results
+                            with app.app_context():
+                                car = CarLog.query.filter_by(car_id=car_id).first()
+                                if car:
+                                    car.actual_part = actual_part
+                                    car.outcome = outcome
+                                    car.original_image = image_base64
+                                    car.result_image = result_image
+                                    car.gray_percentage = gray_percentage
+                                    db.session.commit()
+                                    print(f"Database updated with detection results for car {car_id}")
+                                else:
+                                    print(f"WARNING: Car {car_id} not found in database")
+                            
+                            # Notify frontend of completion
+                            socketio.emit('detection_complete', {
+                                'car_id': car_id,
+                                'actual_part': actual_part,
+                                'outcome': outcome,
+                                'original_image': image_base64,
+                                'result_image': result_image,
+                                'gray_percentage': gray_percentage
+                            })
+                            
+                            # Send final response to PLC based on detection result
+                            print("Sending final response to PLC based on detection result...")
+                            if outcome == "NOGOOD" and 'capo' in actual_part.lower():
+                                print(f"Sending NOGOOD result to ICS for car {car_id}")
+                                
+                                # Send PLC response (NOGOOD)
+                                print("Sending PLC response (NOGOOD)")
+                                send_plc_response(plc_socket, False)
+                                
+                                # Send data to ICS in a separate thread
+                                def send_to_ics_thread():
+                                    try:
+                                        # Set a timeout for ICS operations
+                                        start_time = time.time()
+                                        ics_success = False
+                                        
+                                        while time.time() - start_time < ics_timeout:
+                                            try:
+                                                vin = ics.request_vin(car_id)
+                                                if vin:
+                                                    print(f"Retrieved VIN for car_id {car_id}: {vin}")
+                                                    result = ics.send_defect_data(
+                                                        vin=vin,
+                                                        image_base64=image_base64,
+                                                        expected_part=expected_part,
+                                                        actual_part=actual_part
+                                                    )
+                                                    if result:
+                                                        print(f"Successfully sent defect data to ICS for car_id: {car_id}")
+                                                        ics_success = True
+                                                        break
+                                            except Exception as ics_error:
+                                                print(f"ICS communication error: {str(ics_error)}")
+                                                time.sleep(0.5)  # Brief pause before retry
+                                        
+                                        if not ics_success:
+                                            print(f"Failed to send data to ICS for car {car_id} after {ics_timeout} seconds")
+                                    except Exception as e:
+                                        print(f"Error in ICS communication thread: {str(e)}")
+                                
+                                # Start ICS thread
+                                threading.Thread(target=send_to_ics_thread, daemon=True).start()
+                            else:
+                                # Send PLC response for non-NOGOOD cases
+                                print("Sending PLC response for non-NOGOOD case")
+                                send_plc_response(plc_socket, outcome == "GOOD")
+                            
+                            # Signal that detection is complete
+                            detection_complete.set()
+                                    
+                        except Exception as e:
+                            print(f"ERROR during detection process: {str(e)}")
+                            # Update database with error status
+                            with app.app_context():
+                                car = CarLog.query.filter_by(car_id=car_id).first()
+                                if car:
+                                    car.actual_part = "Error en detección"
+                                    car.outcome = "Error"
+                                    db.session.commit()
+                                    print(f"Database updated with error status for car {car_id}")
+                            # Notify frontend of error
+                            socketio.emit('detection_error', {
+                                'car_id': car_id,
+                                'error': str(e)
+                            })
+                            # Send error response to PLC
+                            send_plc_response(plc_socket, False)
+                            # Signal that detection is complete (even if it failed)
+                            detection_complete.set()
+                    
+                    # Create new car entry in database
+                    with app.app_context():
+                        try:
                             new_car = CarLog(
                                 car_id=car_id,
                                 date=current_time,
@@ -480,175 +660,19 @@ def handle_plc_response(plc_socket):
                                 'date': current_time,
                                 'expected_part': expected_part
                             })
-                            
-                            # Start detection in a separate thread to not block the PLC handler
-                            def process_detection_thread():
-                                try:
-                                    print(f"\n=== Starting detection for car {car_id} ===")
-                                    # Get image based on configured source
-                                    print(f"Image source configured as: {config['image_source']}")
-                                    if config['image_source'] == 'camera':
-                                        print("Capturing image from camera...")
-                                        image_base64 = capture_image()
-                                    else:
-                                        print(f"Loading sample image: {config['image_source']}")
-                                        image_base64 = load_sample_image(config['image_source'])
 
-                                    if not image_base64:
-                                        raise Exception("Failed to get image")
-
-                                    print("Calculating gray percentage...")
-                                    gray_percentage = calculate_gray_percentage(image_base64)
-                                    print(f"Gray percentage calculated: {gray_percentage:.2f}%")
-                                    
-                                    # Initialize variables
-                                    actual_part = None
-                                    detected_objects = []
-                                    result_image = image_base64  # Default to original image
-                                    
-                                    if gray_percentage >= 60:
-                                        print("Gray percentage >= 60%, proceeding with detection...")
-                                        # Load model and labels
-                                        model, labels = get_model_and_labels()
-                                        
-                                        # Perform detection
-                                        print("Running object detection...")
-                                        result_image, detected_objects = tflite_detect_image(
-                                            model, 
-                                            image_base64, 
-                                            labels, 
-                                            min_conf=0.5,
-                                            early_exit=False
-                                        )
-                                        
-                                        print(f"Detection complete. Found {len(detected_objects)} objects")
-                                        
-                                        # Count specific objects
-                                        has_amorfo = any(obj['class'].lower() == 'amorfo' and obj['score'] > 0.5 for obj in detected_objects)
-                                        has_chico = any(obj['class'].lower() == 'chico' and obj['score'] > 0.5 for obj in detected_objects)
-                                        has_mediano = any(obj['class'].lower() == 'mediano' and obj['score'] > 0.5 for obj in detected_objects)
-                                        has_grande = any(obj['class'].lower() == 'grande' and obj['score'] > 0.5 for obj in detected_objects)
-                                        
-                                        print("\n=== Detection Results ===")
-                                        print(f"Detected objects: {[obj['class'] for obj in detected_objects]}")
-                                        print(f"Scores: {[obj['score'] for obj in detected_objects]}")
-                                        print(f"Amorfo detected: {has_amorfo}")
-                                        print(f"Chico detected: {has_chico}")
-                                        print(f"Mediano detected: {has_mediano}")
-                                        print(f"Grande detected: {has_grande}")
-                                        
-                                        # Apply detection rules
-                                        if any(obj['class'].lower() == 'amorfo' for obj in detected_objects):
-                                            actual_part = "Capo tipo 2"
-                                            print("Classified as: Capo tipo 2 (has amorfo)")
-                                        elif has_chico and has_mediano and has_grande:
-                                            actual_part = "Capo tipo 3"
-                                            print("Classified as: Capo tipo 3 (has all three holes)")
-                                        elif len(detected_objects) == 0:
-                                            actual_part = "Capo tipo 1"
-                                            print("Classified as: Capo tipo 1 (no holes detected)")
-                                        else:
-                                            actual_part = "Capo no identificado"
-                                            print("Classified as: Capo no identificado (ambiguous pattern)")
-                                            print("Detected objects:", [f"{obj['class']} (score: {obj['score']:.2f})" for obj in detected_objects])
-                                    else:
-                                        print("No capo detected - gray percentage below 60%")
-                                        actual_part = "No hay capo"
-                                    
-                                    # Determine outcome
-                                    outcome = "GOOD" if actual_part == expected_part else "NOGOOD"
-                                    print(f"\n=== Final Result ===")
-                                    print(f"Expected part: {expected_part}")
-                                    print(f"Actual part: {actual_part}")
-                                    print(f"Outcome: {outcome}")
-                                    
-                                    # Update car in database with results - IMPORTANTE: Usar app_context aquí
-                                    with app.app_context():
-                                        car = CarLog.query.filter_by(car_id=car_id).first()
-                                        if car:
-                                            car.actual_part = actual_part
-                                            car.outcome = outcome
-                                            car.original_image = image_base64
-                                            car.result_image = result_image
-                                            db.session.commit()
-                                            print(f"Database updated with detection results for car {car_id}")
-                                        else:
-                                            print(f"WARNING: Car {car_id} not found in database")
-                                    
-                                    # Notify frontend of completion - No necesita app_context
-                                    socketio.emit('detection_complete', {
-                                        'car_id': car_id,
-                                        'actual_part': actual_part,
-                                        'outcome': outcome,
-                                        'original_image': image_base64,
-                                        'result_image': result_image
-                                    })
-                                    
-                                    # Send response to PLC
-                                    print("Sending response to PLC...")
-                                    if outcome == "NOGOOD" and 'capo' in actual_part.lower():
-                                        print(f"Sending NOGOOD result to ICS for car {car_id}")
-                                        
-                                        # Primero enviar respuesta al PLC inmediatamente
-                                        print("Sending PLC response first (NOGOOD)")
-                                        send_plc_response(plc_socket, False)
-                                        
-                                        # Luego enviar datos a ICS en un hilo separado
-                                        def send_to_ics_thread():
-                                            try:
-                                                # Set a timeout for ICS operations
-                                                start_time = time.time()
-                                                ics_success = False
-                                                
-                                                while time.time() - start_time < ics_timeout:
-                                                    try:
-                                                        vin = ics.request_vin(car_id)
-                                                        if vin:
-                                                            print(f"Retrieved VIN for car_id {car_id}: {vin}")
-                                                            result = ics.send_defect_data(
-                                                                vin=vin,
-                                                                image_base64=image_base64,
-                                                                expected_part=expected_part,
-                                                                actual_part=actual_part
-                                                            )
-                                                            if result:
-                                                                print(f"Successfully sent defect data to ICS for car_id: {car_id}")
-                                                                ics_success = True
-                                                                break
-                                                    except Exception as ics_error:
-                                                        print(f"ICS communication error: {str(ics_error)}")
-                                                        time.sleep(0.5)  # Brief pause before retry
-                                                
-                                                if not ics_success:
-                                                    print(f"Failed to send data to ICS for car {car_id} after {ics_timeout} seconds")
-                                            except Exception as e:
-                                                print(f"Error in ICS communication thread: {str(e)}")
-                                        
-                                        # Iniciar hilo para ICS
-                                        threading.Thread(target=send_to_ics_thread, daemon=True).start()
-                                    else:
-                                        # Send PLC response for non-NOGOOD cases
-                                        print("Sending PLC response for non-NOGOOD case")
-                                        send_plc_response(plc_socket, outcome == "GOOD")
-                                            
-                                except Exception as e:
-                                    print(f"ERROR during detection process: {str(e)}")
-                                    # Usar app_context para actualizar la base de datos en caso de error
-                                    with app.app_context():
-                                        car = CarLog.query.filter_by(car_id=car_id).first()
-                                        if car:
-                                            car.actual_part = "Error en detección"
-                                            car.outcome = "Error"
-                                            db.session.commit()
-                                            print(f"Database updated with error status for car {car_id}")
-                                    # Notificación de error - No necesita app_context
-                                    socketio.emit('detection_error', {
-                                        'car_id': car_id,
-                                        'error': str(e)
-                                    })
-                            
                             # Start the detection thread
-                            threading.Thread(target=process_detection_thread, daemon=True).start()
+                            detection_thread = threading.Thread(target=process_detection_thread, daemon=True)
+                            detection_thread.start()
+                            print("Detection thread started")
+                            
+                            # Wait for detection to complete with timeout
+                            if detection_complete.wait(timeout=30):  # Wait up to 30 seconds
+                                print("Detection completed successfully")
+                            else:
+                                print("Detection timed out after 30 seconds")
+                                # Send timeout response to PLC
+                                send_plc_response(plc_socket, False)
                             
                         except Exception as e:
                             print(f"ERROR during database operations: {str(e)}")
