@@ -59,15 +59,13 @@
       </div>
       <div class="input-group">
         <label>Detección de gris:</label>
-        <div class="toggle-switch">
-          <input 
-            type="checkbox" 
-            v-model="grayDetectionEnabled"
-            @change="updateConfig"
-          >
-          <span class="toggle-slider"></span>
-        </div>
-        <span class="toggle-label">{{ grayDetectionEnabled ? 'Activada' : 'Desactivada' }}</span>
+        <button 
+          class="toggle-button"
+          :class="{ 'enabled': grayDetectionEnabled }"
+          @click="toggleGrayDetection"
+        >
+          {{ grayDetectionEnabled ? 'Activada' : 'Desactivada' }}
+        </button>
       </div>
     </div>
     
@@ -164,6 +162,17 @@ const updateConfig = async () => {
   } catch (error) {
     console.error('Error saving configuration:', error);
     showMessage('Error al guardar la configuración', true);
+  }
+};
+
+// Toggle gray detection
+const toggleGrayDetection = async () => {
+  try {
+    grayDetectionEnabled.value = !grayDetectionEnabled.value;
+    await updateConfig();
+  } catch (error) {
+    console.error('Error toggling gray detection:', error);
+    showMessage('Error al cambiar el estado de detección de gris', true);
   }
 };
 
@@ -278,54 +287,28 @@ h2 {
   background-color: var(--no-good-100);
 }
 
-.toggle-switch {
-  position: relative;
-  display: inline-block;
-  width: 60px;
-  height: 34px;
-  margin-right: 10px;
-}
-
-.toggle-switch input {
-  opacity: 0;
-  width: 0;
-  height: 0;
-}
-
-.toggle-slider {
-  position: absolute;
-  cursor: pointer;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-color: var(--bg-200);
-  transition: .4s;
-  border-radius: 34px;
-}
-
-.toggle-slider:before {
-  position: absolute;
-  content: "";
-  height: 26px;
-  width: 26px;
-  left: 4px;
-  bottom: 4px;
+.toggle-button {
+  padding: 8px 16px;
+  border-radius: 5px;
+  border: 1px solid var(--bg-200);
   background-color: var(--bg-100);
-  transition: .4s;
-  border-radius: 50%;
-}
-
-input:checked + .toggle-slider {
-  background-color: var(--accent-100);
-}
-
-input:checked + .toggle-slider:before {
-  transform: translateX(26px);
-}
-
-.toggle-label {
-  margin-left: 10px;
   color: var(--text-100);
+  cursor: pointer;
+  transition: all 0.3s ease;
+  min-width: 120px;
+  font-weight: bold;
+}
+
+.toggle-button:hover {
+  background-color: var(--bg-200);
+}
+
+.toggle-button.enabled {
+  background-color: var(--accent-100);
+  border-color: var(--accent-200);
+}
+
+.toggle-button.enabled:hover {
+  background-color: var(--accent-200);
 }
 </style>

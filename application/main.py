@@ -23,6 +23,8 @@ from datetime import datetime
 import uuid
 import requests
 import traceback  # Add traceback import
+import random
+import string
 
 app = Flask(__name__, static_folder='../application-ui', static_url_path='/')
 CORS(app)  # Allow specific frontend
@@ -402,43 +404,52 @@ def handle_plc_response(plc_socket):
                 print(f"Decoded PLC message: {message}")
                 message_count += 1
                 
-                if len(message) < 10:
+                if len(message) < 8:  # Minimum length: 3 (sequence) + 5 (body) + 2 (capot)
                     print(f"WARNING: Invalid message format (too short): {message}")
                     continue
                 
-                # Extract sequence and part type from message
+                # Extract components from message
                 try:
                     print("\n=== Parsing message ===")
-                    sequence = message[3:7]  # Get the sequence number after "SEQ"
+                    sequence = message[:3]  # First 3 digits
+                    body = message[3:8]     # Next 5 characters (letter + 4 digits)
+                    capot = message[8:]     # Last 2 digits (01, 05, or 08)
+                    
                     print(f"Extracted sequence: {sequence}")
+                    print(f"Extracted body: {body}")
+                    print(f"Extracted capot type: {capot}")
                     
-                    pn_pos = message.find("PN")  # Find the position of "PN"
-                    print(f"Found PN at position: {pn_pos}")
-                    
-                    if pn_pos == -1:
-                        print("ERROR: Invalid message format: PN not found")
-                        continue
-                        
-                    capot_type = message[pn_pos + 2]  # Get the number after "PN"
-                    print(f"Extracted capot type: {capot_type}")
-                    
+                    # Map capot type to expected part
                     expected_part = {
-                        "1": "Capo tipo 1",
-                        "2": "Capo tipo 2",
-                        "3": "Capo tipo 3"
-                    }.get(capot_type)
+                        "01": "Capo tipo 1",
+                        "05": "Capo tipo 2",
+                        "08": "Capo tipo 3"
+                    }.get(capot)
                     
                     if not expected_part:
-                        print(f"ERROR: Unknown capot type: {capot_type}")
+                        print(f"ERROR: Unknown capot type: {capot}")
                         continue
 
-                    car_id = f"{sequence}-{message[pn_pos:]}"
+                    # Generate a unique car ID using timestamp and random component
+                    max_attempts = 10  # Maximum number of attempts to generate a unique ID
+                    attempt = 0
+                    car_id = None
                     
-                    # Check if we've already processed this car
-                    if car_id in processed_cars:
-                        print(f"WARNING: Car {car_id} has already been processed, skipping")
-                        continue
+                    while attempt < max_attempts:
+                        random_suffix = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
+                        temp_car_id = f"{sequence}-{body}-{capot}-{random_suffix}"
                         
+                        # Check if this ID already exists
+                        existing_car = db.session.query(CarLog).filter_by(car_id=temp_car_id).first()
+                        if not existing_car:
+                            car_id = temp_car_id
+                            break
+                        attempt += 1
+                    
+                    if not car_id:
+                        print(f"ERROR: Could not generate unique car ID after {max_attempts} attempts")
+                        continue
+                    
                     current_time = time.strftime("%d-%m-%Y %H:%M:%S")
                     print(f"\n=== Processing car ===")
                     print(f"Generated car_id: {car_id}")
@@ -448,17 +459,7 @@ def handle_plc_response(plc_socket):
                     with app.app_context():
                         print("\n=== Database operations ===")
                         try:
-                            # Check if car already exists using a single query with FOR UPDATE
-                            existing_car = db.session.query(CarLog).filter_by(car_id=car_id).with_for_update().first()
-                            
-                            if existing_car:
-                                print(f"WARNING: Car {car_id} already exists in database, skipping")
-                                processed_cars.add(car_id)  # Add to processed set
-                                db.session.rollback()  # Release the lock
-                                continue
-
-                            print("Creating new car entry...")
-                            # Create initial car entry
+                            # Create new car entry
                             new_car = CarLog(
                                 car_id=car_id,
                                 date=current_time,
@@ -466,10 +467,8 @@ def handle_plc_response(plc_socket):
                                 actual_part="Pendiente",
                                 original_image="",
                                 result_image="",
-                                outcome="Pendiente",
-                                gray_percentage=None
+                                outcome="Pendiente"
                             )
-                            
                             db.session.add(new_car)
                             db.session.commit()
                             processed_cars.add(car_id)  # Add to processed set
@@ -571,7 +570,6 @@ def handle_plc_response(plc_socket):
                                             car.outcome = outcome
                                             car.original_image = image_base64
                                             car.result_image = result_image
-                                            car.gray_percentage = gray_percentage
                                             db.session.commit()
                                             print(f"Database updated with detection results for car {car_id}")
                                         else:
@@ -880,7 +878,7 @@ def process_detection(image_base64, expected_part):
     detected_objects = []
     result_image = image_base64  # Default to original image
     
-    # Skip gray percentage check if disabled
+    # Skip gray percentage check if disabled or if gray percentage is high enough
     if not config.get("gray_detection_enabled", True) or gray_percentage >= 60:
         # Load model and labels
         model, labels = get_model_and_labels()
@@ -996,25 +994,20 @@ def capture_and_detect():
                 'gray_percentage': gray_percentage
             }
             
-            existing_car = CarLog.query.filter_by(car_id=car_id).first()
-            if existing_car:
-                for key, value in log_data.items():
-                    setattr(existing_car, key, value)
-                db.session.commit()
-                
-                # Notify frontend to update with final result
-                socketio.emit('detection_complete', {
-                    'car_id': car_id,
-                    'actual_part': actual_part,
-                    'outcome': outcome,
-                    'original_image': base64_image,
-                    'result_image': result_image,
-                    'gray_percentage': gray_percentage
-                })
-            else:
-                new_log = CarLog(**log_data)
-                db.session.add(new_log)
-                db.session.commit()
+            # Always create a new log entry
+            new_log = CarLog(**log_data)
+            db.session.add(new_log)
+            db.session.commit()
+            
+            # Notify frontend to update with final result
+            socketio.emit('detection_complete', {
+                'car_id': car_id,
+                'actual_part': actual_part,
+                'outcome': outcome,
+                'original_image': base64_image,
+                'result_image': result_image,
+                'gray_percentage': gray_percentage
+            })
         
         # Calculate processing time
         processing_time = (time.time() - start_time) * 1000
@@ -1134,16 +1127,6 @@ def add_log():
             if field not in data:
                 return jsonify({'error': f'Missing required field: {field}'}), 400
         
-        # Check if car_id already exists
-        existing_log = CarLog.query.filter_by(car_id=data['car_id']).first()
-        if existing_log:
-            # Update existing log
-            for key, value in data.items():
-                if hasattr(existing_log, key):
-                    setattr(existing_log, key, value)
-            db.session.commit()
-            return jsonify({'message': 'Log updated successfully', 'id': existing_log.id})
-        
         # Create new log
         new_log = CarLog(
             car_id=data['car_id'],
@@ -1210,6 +1193,8 @@ def handle_config():
                 config['image_source'] = str(data['image_source'])
             else:
                 return jsonify({"error": f"image_source must be one of: {', '.join(valid_sources)}"}), 400
+        if 'gray_detection_enabled' in data:
+            config['gray_detection_enabled'] = bool(data['gray_detection_enabled'])
         
         return jsonify({"message": "Configuration updated successfully"}), 200
 

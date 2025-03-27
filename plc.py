@@ -4,31 +4,47 @@ import threading
 import random
 import argparse
 import sys
+import string
 
-def generate_unique_sequence():
-    """Generate a unique sequence number using timestamp and random number"""
-    timestamp = int(time.time() * 1000) % 10000  # Get last 4 digits of current timestamp in milliseconds
-    random_num = random.randint(0, 999)  # 3-digit random number
-    return f"{timestamp:04d}{random_num:03d}"[-4:]  # Take last 4 digits to maintain format
+def generate_sequence():
+    """Generate a 3-digit sequence number"""
+    return str(random.randint(100, 999))
+
+def generate_body():
+    """Generate a body in format: letter + 4 digits"""
+    letter = random.choice(string.ascii_uppercase)
+    digits = ''.join([str(random.randint(0, 9)) for _ in range(4)])
+    return f"{letter}{digits}"
+
+def get_capot_type(key):
+    """Convert key to correct capot type"""
+    capot_map = {
+        '1': '01',
+        '2': '05',
+        '3': '08'
+    }
+    return capot_map.get(key, random.choice(['01', '05', '08']))
 
 def send_manual_message(conn, capot_type=None):
     """Send a single message with an optional specified capot type"""
-    # Generate a unique sequence number
-    sequence = generate_unique_sequence()
+    # Generate message components
+    sequence = generate_sequence()
+    body = generate_body()
     
     # Use specified capot type or random one
     if capot_type not in ['1', '2', '3']:
-        capot = random.choice(['1', '2', '3'])
+        capot = random.choice(['01', '05', '08'])
     else:
-        capot = capot_type
+        capot = get_capot_type(capot_type)
     
-    # Construct the full message in expected format: SEQxxxxPNyWTzz
-    message = f"SEQ{sequence}PN{capot}WT01"
+    # Construct the full message
+    message = f"{sequence}{body}{capot}"
     
     try:
         conn.sendall(message.encode())
         print(f"Sent manual PLC message: {message}")
         print(f"  - Sequence: {sequence}")
+        print(f"  - Body: {body}")
         print(f"  - Capot type: {capot}")
         print("Waiting for detection result...")
         
@@ -66,7 +82,7 @@ def send_manual_message(conn, capot_type=None):
 
 def send_periodic_messages(conn, interval=30):
     # Function to send periodic messages to the client
-    last_sequence = None
+    last_message = None
     
     while True:
         try:
@@ -77,21 +93,26 @@ def send_periodic_messages(conn, interval=30):
                 print("Connection lost to server")
                 return
             
-            # Generate unique sequence
-            sequence = generate_unique_sequence()
-            while sequence == last_sequence:  # Ensure we don't repeat the last sequence
-                sequence = generate_unique_sequence()
-            last_sequence = sequence
+            # Generate message components
+            sequence = generate_sequence()
+            body = generate_body()
+            capot = random.choice(['01', '05', '08'])
             
-            # Generate a random capot type (1, 2, or 3)
-            capot = random.choice(['1', '2', '3'])
+            # Construct the full message
+            message = f"{sequence}{body}{capot}"
             
-            # Construct the full message in expected format: SEQxxxxPNyWTzz
-            message = f"SEQ{sequence}PN{capot}WT01"
+            # Ensure we don't repeat the last message
+            while message == last_message:
+                sequence = generate_sequence()
+                body = generate_body()
+                capot = random.choice(['01', '05', '08'])
+                message = f"{sequence}{body}{capot}"
+            last_message = message
             
             conn.sendall(message.encode())
             print(f"Sent PLC message: {message}")
             print(f"  - Sequence: {sequence}")
+            print(f"  - Body: {body}")
             print(f"  - Capot type: {capot}")
             print("Waiting for detection result...")
             
@@ -134,13 +155,13 @@ def run_button_simulator(conn):
     """Simulate button presses to send car messages"""
     print("\n=== BUTTON SIMULATOR MODE ===")
     print("Press keys to simulate button presses:")
-    print("1 - Send Capo Tipo 1")
-    print("2 - Send Capo Tipo 2")
-    print("3 - Send Capo Tipo 3")
+    print("1 - Send Capo Tipo 01")
+    print("2 - Send Capo Tipo 05")
+    print("3 - Send Capo Tipo 08")
     print("q - Quit")
     print("==============================\n")
     
-    last_sequence = None
+    last_message = None
     detection_in_progress = False
     
     def wait_for_response():
@@ -206,21 +227,29 @@ def run_button_simulator(conn):
                 detection_in_progress = True
                 print("\nStarting detection process...")
                 
-                # Generate unique sequence
-                sequence = generate_unique_sequence()
-                while sequence == last_sequence:  # Ensure we don't repeat the last sequence
-                    sequence = generate_unique_sequence()
-                last_sequence = sequence
+                # Generate message components
+                sequence = generate_sequence()
+                body = generate_body()
+                capot = get_capot_type(key)
                 
-                # Construct message in the format expected by the application: SEQxxxxPNyWTzz
-                message = f"SEQ{sequence}PN{key}WT01"
+                # Construct the full message
+                message = f"{sequence}{body}{capot}"
+                
+                # Ensure we don't repeat the last message
+                while message == last_message:
+                    sequence = generate_sequence()
+                    body = generate_body()
+                    capot = get_capot_type(key)
+                    message = f"{sequence}{body}{capot}"
+                last_message = message
                 
                 try:
                     # Send the message
                     conn.sendall(message.encode())
                     print(f"Message sent successfully:")
                     print(f"  - Sequence: {sequence}")
-                    print(f"  - Capot type: {key}")
+                    print(f"  - Body: {body}")
+                    print(f"  - Capot type: {capot}")
                     print("\nWaiting for detection result...")
                     
                     # Wait for response
