@@ -927,7 +927,7 @@ def process_detection(image_base64, expected_part):
             actual_part = "Capo tipo 2"
         elif has_chico and has_mediano and has_grande:
             actual_part = "Capo tipo 3"
-        elif len(detected_objects) == 0:
+        elif not has_chico and not has_mediano and not has_grande:
             actual_part = "Capo tipo 1"
         else:
             actual_part = "Capo no identificado"
