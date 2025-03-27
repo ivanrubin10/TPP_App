@@ -441,12 +441,16 @@ def handle_plc_response(plc_socket):
                         
                         # Check if this ID already exists in both CarLog and QueuedCar
                         with app.app_context():
-                            existing_car = db.session.query(CarLog).filter_by(car_id=temp_car_id).first()
-                            existing_queued = db.session.query(QueuedCar).filter_by(car_id=temp_car_id).first()
-                            
-                            if not existing_car and not existing_queued:
-                                car_id = temp_car_id
-                                break
+                            try:
+                                existing_car = db.session.query(CarLog).filter_by(car_id=temp_car_id).first()
+                                existing_queued = db.session.query(QueuedCar).filter_by(car_id=temp_car_id).first()
+                                
+                                if not existing_car and not existing_queued:
+                                    car_id = temp_car_id
+                                    break
+                            except Exception as e:
+                                print(f"Error checking for existing car ID: {e}")
+                                db.session.rollback()
                         attempt += 1
                     
                     if not car_id:
@@ -640,6 +644,12 @@ def handle_plc_response(plc_socket):
                     # Create new car entry in database
                     with app.app_context():
                         try:
+                            # Double check that the car doesn't exist before inserting
+                            existing_car = db.session.query(CarLog).filter_by(car_id=car_id).first()
+                            if existing_car:
+                                print(f"WARNING: Car {car_id} already exists in database, skipping creation")
+                                return
+                                
                             new_car = CarLog(
                                 car_id=car_id,
                                 date=current_time,
