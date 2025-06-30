@@ -492,7 +492,7 @@ def handle_plc_response(plc_socket):
                             result_image = image_base64
                             
                             # If gray detection is disabled or gray percentage is high enough, proceed with object detection
-                            if not config.get("gray_detection_enabled", True) or gray_percentage >= 60:
+                            if not config.get("gray_detection_enabled", True) or gray_percentage >= 89:
                                 print("Proceeding with detection...")
                                 # Load model and labels
                                 model, labels = get_model_and_labels()
@@ -531,16 +531,16 @@ def handle_plc_response(plc_socket):
                                     actual_part = "Capo tipo 3"
                                     print("Classified as: Capo tipo 3 (has all three holes)")
                                 elif not has_chico and not has_mediano and not has_grande:
-                                    if not config.get("gray_detection_enabled", True):
-                                        actual_part = "Capo tipo 1"  # When gray detection is disabled and no objects detected
+                                    if gray_percentage >= 89:
+                                        actual_part = "Capo tipo 1"  # High gray, no holes = Capo tipo 1
                                     else:
-                                        actual_part = "No hay capo"  # When gray detection is enabled and no objects detected
+                                        actual_part = "No hay capo"  # Low gray, no holes = No hay capo
                                 else:
                                     actual_part = "Capo no identificado"
                                     print("Classified as: Capo no identificado (ambiguous pattern)")
                                     print("Detected objects:", [f"{obj['class']} (score: {obj['score']:.2f})" for obj in detected_objects])
                             else:
-                                print("No capo detected - gray percentage below 60%")
+                                print("No capo detected - gray percentage below 89%")
                                 actual_part = "No hay capo"
                             
                             # Determine outcome
@@ -916,7 +916,7 @@ def process_detection(image_base64, expected_part):
     result_image = image_base64  # Default to original image
     
     # If gray detection is disabled or gray percentage is high enough, proceed with object detection
-    if not config.get("gray_detection_enabled", True) or gray_percentage >= 60:
+    if not config.get("gray_detection_enabled", True) or gray_percentage >= 89:
         # Load model and labels
         model, labels = get_model_and_labels()
         
@@ -941,14 +941,14 @@ def process_detection(image_base64, expected_part):
         elif has_chico and has_mediano and has_grande:
             actual_part = "Capo tipo 3"
         elif not has_chico and not has_mediano and not has_grande:
-            if not config.get("gray_detection_enabled", True):
-                actual_part = "Capo tipo 1"  # When gray detection is disabled and no objects detected
+            if gray_percentage >= 89:
+                actual_part = "Capo tipo 1"  # High gray, no holes = Capo tipo 1
             else:
-                actual_part = "No hay capo"  # When gray detection is enabled and no objects detected
+                actual_part = "No hay capo"  # Low gray, no holes = No hay capo
         else:
             actual_part = "Capo no identificado"
     else:
-        print("No capo detected - gray percentage below 60%")
+        print("No capo detected - gray percentage below 89%")
         actual_part = "No hay capo"
     
     return actual_part, result_image, detected_objects, gray_percentage
@@ -987,7 +987,7 @@ def capture_and_detect():
         result_image = base64_image
         
         # If gray detection is disabled or gray percentage is high enough, proceed with object detection
-        if not config.get("gray_detection_enabled", True) or gray_percentage >= 60:
+        if not config.get("gray_detection_enabled", True) or gray_percentage >= 89:
             print("Proceeding with detection...")
             # Load model and labels
             model, labels = get_model_and_labels()
@@ -1013,14 +1013,14 @@ def capture_and_detect():
             elif has_chico and has_mediano and has_grande:
                 actual_part = "Capo tipo 3"
             elif not has_chico and not has_mediano and not has_grande:
-                if not config.get("gray_detection_enabled", True):
-                    actual_part = "Capo tipo 1"  # When gray detection is disabled and no objects detected
+                if gray_percentage >= 89:
+                    actual_part = "Capo tipo 1"  # High gray, no holes = Capo tipo 1
                 else:
-                    actual_part = "No hay capo"  # When gray detection is enabled and no objects detected
+                    actual_part = "No hay capo"  # Low gray, no holes = No hay capo
             else:
                 actual_part = "Capo no identificado"
         else:
-            print("No capo detected - gray percentage below 60%")
+            print("No capo detected - gray percentage below 89%")
             actual_part = "No hay capo"
         
         # Determine outcome
